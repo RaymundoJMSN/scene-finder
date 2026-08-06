@@ -1,4 +1,7 @@
-# Scene Finder - instalador idempotente. Rodar de novo e sempre seguro.
+# Scene Finder - ambiente de DESENVOLVIMENTO (venv com torch, so para exportar
+# os modelos ONNX em tools/export_onnx.py). Idempotente.
+# Quem so quer usar o app baixa o instalador em Releases; quem quer empacotar
+# roda build.ps1, que usa o venv-build enxuto.
 $ErrorActionPreference = 'Stop'
 $app = $PSScriptRoot
 $venv = Join-Path $app 'venv'
@@ -51,26 +54,13 @@ if (Test-Deps) {
     if ($LASTEXITCODE -ne 0) { throw 'download dos modelos falhou' }
 }
 
-# icone + atalhos (so quando o app ja existe; permite rodar o instalador cedo)
 if (Test-Path (Join-Path $app 'make_icon.py')) {
     & $python (Join-Path $app 'make_icon.py')
 }
-$ico = Join-Path $app 'icon.ico'
-if ((Test-Path (Join-Path $app 'app.py')) -and (Test-Path $ico)) {
-    $pythonw = Join-Path $venv 'Scripts\pythonw.exe'
-    $ws = New-Object -ComObject WScript.Shell
-    $destinos = @(
-        [Environment]::GetFolderPath('Desktop'),
-        (Join-Path $env:APPDATA 'Microsoft\Windows\Start Menu\Programs')
-    )
-    foreach ($d in $destinos) {
-        $lnk = $ws.CreateShortcut((Join-Path $d 'Scene Finder.lnk'))
-        $lnk.TargetPath = $pythonw
-        $lnk.Arguments = '"' + (Join-Path $app 'app.py') + '"'
-        $lnk.WorkingDirectory = $app
-        $lnk.IconLocation = $ico
-        $lnk.Save()
-    }
-    Write-Host ">>> atalhos criados (Desktop + Menu Iniciar)"
-}
-Write-Host ">>> INSTALACAO CONCLUIDA"
+
+# sem atalhos aqui de proposito: eles apontariam para o codigo-fonte e ficariam
+# competindo com o app instalado pelo Inno Setup (mesmo nome, mesma porta).
+Write-Host ">>> AMBIENTE DE DEV PRONTO"
+Write-Host "    modelos:  venv\Scripts\python tools\export_onnx.py"
+Write-Host "    rodar:    venv\Scripts\python app.py"
+Write-Host "    empacotar: build.ps1"
