@@ -38,9 +38,8 @@ jobs:
       - name: dependencias de runtime e build
         run: pip install onnxruntime numpy pillow tokenizers pywebview pyinstaller
 
-      - name: conferir que o ONNX nao degradou (sem indice: so o encoder)
-        run: |
-          python -c "import encoder; import numpy as np; v = encoder.encode_texts(['tavern at night','taverna a noite']); assert v.shape == (2, 512), v.shape; sim = float(v[0] @ v[1]); print('PT/EN similaridade:', round(sim, 3)); assert sim > 0.8, 'multilingual quebrado'"
+      - name: conferir o encoder exportado
+        run: python tools/smoke_encoder.py
 
       - name: icone
         run: python make_icon.py
