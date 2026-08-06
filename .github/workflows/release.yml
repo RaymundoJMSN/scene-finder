@@ -1,0 +1,73 @@
+name: build e release
+
+# Publica o instalador quando uma tag v* e empurrada.
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # torch so serve para exportar os modelos; nao entra no pacote final
+      - name: cache dos modelos CLIP
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/huggingface
+          key: hf-clip-v1
+
+      - name: dependencias de exportacao
+        run: |
+          python -m pip install --upgrade pip
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install sentence-transformers onnx onnxruntime onnxscript pillow numpy
+
+      - name: exportar modelos ONNX
+        run: python tools/export_onnx.py
+
+      - name: dependencias de runtime e build
+        run: pip install onnxruntime numpy pillow tokenizers pywebview pyinstaller
+
+      - name: conferir que o ONNX nao degradou (sem indice: so o encoder)
+        run: |
+          python -c "import encoder; import numpy as np; v = encoder.encode_texts(['tavern at night','taverna a noite']); assert v.shape == (2, 512), v.shape; sim = float(v[0] @ v[1]); print('PT/EN similaridade:', round(sim, 3)); assert sim > 0.8, 'multilingual quebrado'"
+
+      - name: icone
+        run: python make_icon.py
+
+      - name: PyInstaller
+        run: pyinstaller --noconfirm --clean scenefinder.spec
+
+      - name: versao
+        id: v
+        shell: pwsh
+        run: |
+          $v = (Select-String -Path version.py -Pattern '__version__\s*=\s*"([^"]+)"').Matches[0].Groups[1].Value
+          "versao=$v" >> $env:GITHUB_OUTPUT
+          "tag do git: $env:GITHUB_REF_NAME / version.py: $v"
+
+      - name: instalador (Inno Setup)
+        run: |
+          & "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe" "/DAppVersion=${{ steps.v.outputs.versao }}" installer.iss
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: SceneFinder-Setup
+          path: dist/SceneFinder-Setup-*.exe
+
+      - name: publicar release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/SceneFinder-Setup-*.exe
+          generate_release_notes: true

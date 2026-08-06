@@ -1,0 +1,25 @@
+# notas internas de desenvolvimento (citam caminhos e criadores pessoais)
+design.md
+plan.md
+
+# dados do usuario e do indice (nunca versionar)
+config.json
+index.npz
+names.npz
+meta.json
+thumbs/
+czepeku_cache.json
+indexer.log
+install.log
+_backup_torch_index/
+
+# modelos ONNX (225 MB) - gerados por tools/export_onnx.py, distribuidos na release
+models/
+
+# build
+venv/
+venv-build/
+build/
+dist/
+__pycache__/
+*.pyc

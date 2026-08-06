@@ -1,0 +1,13 @@
+{
+  "_comentario": "Copie para config.json. O app cria este arquivo sozinho no primeiro uso e tenta achar a pasta do Foundry; edite pela tela de Pastas do app ou aqui.",
+  "foundry_data": "X:\\FoundryVTT\\Data",
+  "folders": [
+    "X:\\FoundryVTT\\Data\\Assets",
+    "X:\\FoundryVTT\\Data\\modules"
+  ],
+  "min_side": 1024,
+  "port": 8060,
+  "top_k": 60,
+  "subreddits": ["battlemaps", "dndmaps", "FantasyMaps"],
+  "kemono": []
+}
