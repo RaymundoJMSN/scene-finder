@@ -138,10 +138,50 @@ def _atomic_write(path, data: bytes):
 def load_index(out=APP):
     meta_p, npz_p = Path(out) / "meta.json", Path(out) / "index.npz"
     if not (meta_p.exists() and npz_p.exists()):
-        return np.zeros((0, 512), dtype=np.float32), []
+        return np.zeros((0, encoder.dim()), dtype=np.float32), []
     items = json.loads(meta_p.read_text("utf-8"))["items"]
     emb = np.load(npz_p)["emb"]
+    if emb.shape[1] != encoder.dim():
+        # indice de outro modelo: inutil, sera reconstruido do zero
+        log.info("indice com dim %s, modelo usa %s: descartando",
+                 emb.shape[1], encoder.dim())
+        return np.zeros((0, encoder.dim()), dtype=np.float32), []
     return emb, items
+
+
+# marcas de variante do MESMO mapa: dia/noite, com grade, limpo, estacoes...
+VARIANTE = {"day", "night", "dawn", "dusk", "original", "clean", "empty",
+            "winter", "summer", "spring", "autumn", "fall", "rain", "rainy",
+            "snow", "snowy", "fog", "foggy", "storm", "dust", "wind", "cloudy",
+            "dark", "lit", "lights", "sunset", "sunrise", "overcast",
+            "gridless", "gridded", "grid", "nogrid", "variant", "variants",
+            "gm", "player", "dm", "hd", "low", "high", "res", "alt", "version",
+            "top", "bottom", "upper", "lower", "floor", "level", "part"}
+
+
+def map_key(path):
+    """Identidade do MAPA, ignorando a variante.
+
+    Um mesmo mapa costuma vir em 5-15 arquivos (Day/Night/Gridless/...). Sem
+    isto, uma busca por 'wild west saloon' devolve 12 resultados que sao 3 mapas.
+    A chave e a pasta-mae + as palavras do nome que nao sao marca de variante.
+    """
+    p = Path(path)
+    # as PRIMEIRAS palavras nomeiam o mapa; o que vem depois e variante
+    # (WildWestSaloon_NoSkull_Day, WildWestSaloon_SandStorm...). Listar todas as
+    # variacoes possiveis seria infinito - o prefixo resolve sozinho.
+    nome = [w for w in _word_list(p.stem) if w not in VARIANTE][:3]
+    # junta tambem o mesmo mapa baixado em pastas diferentes (pacote solto +
+    # modulo do Foundry, algo comum no acervo)
+    if len(nome) >= 2:
+        return " ".join(nome)
+    nome = sorted(nome)
+    # nome pobre ("map01", "01a"): so a pasta distingue
+    pasta = p.parent
+    if pasta.name.lower() in ("variants", "scenes", "gridless", "gridded",
+                              "thumbs", "assets", "maps", "webp", "jpg", "png"):
+        pasta = pasta.parent
+    return f"{pasta.name.lower()}|{' '.join(nome)}"
 
 
 def _pretty_name(path):
@@ -155,7 +195,8 @@ def build_name_index(items, out=APP):
     multilingual) -> busca em PT casa com nome em EN. Independe das imagens."""
     out = Path(out)
     names = [_pretty_name(it["p"]) for it in items]
-    nemb = encoder.encode_texts(names) if names else np.zeros((0, 512), np.float32)
+    nemb = (encoder.encode_texts(names) if names
+            else np.zeros((0, encoder.dim()), np.float32))
     buf = tempfile.NamedTemporaryFile(delete=False, dir=out, suffix=".npz")
     np.savez_compressed(buf, nemb=nemb)
     buf.close()
@@ -232,8 +273,9 @@ def build_index(cfg, out=APP, progress=None, limit=None):
                 progress(min(done, len(files)), len(files))
 
     counts["added"] = len(new_items)
-    emb = np.vstack([old_emb[kept_rows].reshape(-1, 512)] +
-                    [np.array(new_embs, dtype=np.float32).reshape(-1, 512)])
+    d = encoder.dim()
+    emb = np.vstack([old_emb[kept_rows].reshape(-1, d)] +
+                    [np.array(new_embs, dtype=np.float32).reshape(-1, d)])
     items = kept_items + new_items
 
     # thumbs orfaos
@@ -253,12 +295,17 @@ def build_index(cfg, out=APP, progress=None, limit=None):
     return counts
 
 
-def _words(text):
-    """Tokens minusculos sem acento, quebrando em nao-alfanumerico e camelCase."""
+def _word_list(text):
+    """Tokens minusculos sem acento, NA ORDEM, quebrando em camelCase."""
     text = unicodedata.normalize("NFKD", text)
     text = "".join(c for c in text if not unicodedata.combining(c))
     text = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", text)
-    return {w for w in re.split(r"[^A-Za-z0-9]+", text.lower()) if len(w) > 2}
+    return [w for w in re.split(r"[^A-Za-z0-9]+", text.lower()) if len(w) > 2]
+
+
+def _words(text):
+    """Mesmos tokens, como conjunto (para interseccao na busca literal)."""
+    return set(_word_list(text))
 
 
 def _name_words(item):
@@ -302,11 +349,16 @@ def _check():
     c1 = build_index(cfg, out=tmp, limit=20)
     assert c1["added"] == 20, f"esperava 20 novos, veio {c1}"
     emb, items = load_index(tmp)
-    assert len(items) == 20 and emb.shape == (20, 512), "indice invalido"
+    d = encoder.dim()
+    assert len(items) == 20 and emb.shape == (20, d), \
+        f"indice invalido: {len(items)} itens, shape {emb.shape}, esperado (20,{d})"
     c2 = build_index(cfg, out=tmp, limit=20)
     assert c2["added"] == 0 and c2["kept"] == 20, f"incremental quebrado: {c2}"
     nemb = load_name_index(items, tmp)
-    assert nemb.shape == (20, 512), f"indice de nomes invalido: {nemb.shape}"
+    assert nemb.shape == (20, d), f"indice de nomes invalido: {nemb.shape}"
+
+    chaves = {map_key(it["p"]) for it in items}
+    assert chaves, "map_key nao gerou nenhuma chave"
     res = search("tavern", emb, items, top_k=20, nemb=nemb)
     assert len(res) == 20, "busca nao retornou tudo"
     assert all(res[i][0] >= res[i + 1][0] for i in range(len(res) - 1)), "sem ordenacao"

@@ -16,6 +16,8 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from xml.etree import ElementTree
 
+import numpy as np
+
 import encoder
 import indexer
 import ptbr
@@ -46,6 +48,10 @@ def _boot():
     indexer.encoder.encode_texts(["warmup"])  # carrega a sessao ONNX antes da 1a busca
     STATE["nemb"] = indexer.load_name_index(STATE["items"])
     STATE["ready"] = True
+    # sem indice mas com pastas configuradas = primeira execucao ou troca de
+    # modelo (o indice antigo vira incompativel). Reindexa sem o usuario pedir.
+    if not STATE["items"] and CFG.get("folders"):
+        start_reindex()
 
 
 def _http_get(url, timeout=5, headers=None):
@@ -212,6 +218,37 @@ def start_reindex():
 
 # ---------- handler ----------
 
+def _card(score, gi):
+    it = STATE["items"][gi]
+    p = it["p"]
+    try:
+        foundry = str(Path(p).relative_to(CFG["foundry_data"])).replace("\\", "/")
+    except (ValueError, KeyError):
+        foundry = p.replace("\\", "/")
+    return {"i": gi, "path": p, "foundry": foundry,
+            "thumb": f"/thumbs/{it['t']}", "score": round(score, 3),
+            "name": Path(p).stem, "dir": "/".join(Path(p).parts[-3:-1])}
+
+
+def _formatar(res, agrupar):
+    """Um card por MAPA; as variantes vao dentro dele.
+
+    Sem agrupar, um unico mapa com 12 variantes ocupa a tela inteira e esconde
+    as outras opcoes."""
+    if not agrupar:
+        return [_card(s, i) for s, i in res]
+    grupos, ordem = {}, []
+    for score, gi in res:
+        k = indexer.map_key(STATE["items"][gi]["p"])
+        if k not in grupos:
+            grupos[k] = _card(score, gi)
+            grupos[k]["variants"] = []
+            ordem.append(k)
+        elif len(grupos[k]["variants"]) < 40:
+            grupos[k]["variants"].append(_card(score, gi))
+    return [grupos[k] for k in ordem]
+
+
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a):
         pass
@@ -272,26 +309,35 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/search":
             if not STATE["ready"]:
                 return self._json({"ready": False, "results": []})
+            alvo = CFG.get("top_k", 60)
             with SEARCH_LOCK:
+                # busca fundo porque o agrupamento colapsa muitos resultados
+                # num card so; sem isso a tela ficaria com poucos mapas
                 res = indexer.search(q, STATE["emb"], STATE["items"],
-                                     CFG.get("top_k", 60),
-                                     nemb=STATE["nemb"]) if q else []
-            data_root = CFG["foundry_data"]
-            results = []
-            for score, gi in res:
-                it = STATE["items"][gi]
-                p = it["p"]
-                try:
-                    foundry = str(Path(p).relative_to(data_root)).replace("\\", "/")
-                except ValueError:
-                    foundry = p.replace("\\", "/")
-                results.append({
-                    "i": gi, "path": p, "foundry": foundry,
-                    "thumb": f"/thumbs/{it['t']}", "score": round(score, 3),
-                    "name": Path(p).stem,
-                    "dir": "/".join(Path(p).parts[-3:-1]),
-                })
-            return self._json({"ready": True, "results": results})
+                                     alvo * 8, nemb=STATE["nemb"]) if q else []
+            return self._json({"ready": True,
+                               "results": _formatar(res, True)[:alvo]})
+
+        if u.path == "/api/similar":
+            # "mais como esta": usa o vetor da propria imagem, ja indexado
+            if not STATE["ready"]:
+                return self._json({"ready": False, "results": []})
+            try:
+                gi = int((qs.get("i") or ["-1"])[0])
+                alvo = CFG.get("top_k", 60)
+                with SEARCH_LOCK:
+                    scores = STATE["emb"] @ STATE["emb"][gi]
+                    ordem = np.argsort(-scores)[:alvo * 10]
+                # tira o proprio mapa: quem pede "parecidos" quer OUTROS mapas,
+                # nao as 40 variantes deste
+                base_key = indexer.map_key(STATE["items"][gi]["p"])
+                res = [(float(scores[j]), int(j)) for j in ordem
+                       if indexer.map_key(STATE["items"][j]["p"]) != base_key]
+                return self._json({"ready": True,
+                                   "results": _formatar(res, True)[:alvo],
+                                   "base": _card(1.0, gi)})
+            except Exception as e:
+                return self._json({"error": str(e)}, 400)
 
         if u.path == "/api/online":
             src = (qs.get("src") or [""])[0]
@@ -330,6 +376,15 @@ class H(BaseHTTPRequestHandler):
             try:
                 it = STATE["items"][int((qs.get("i") or ["-1"])[0])]
                 subprocess.Popen(["explorer", "/select,", it["p"]])
+                return self._json({"ok": True})
+            except Exception as e:
+                return self._json({"error": str(e)}, 400)
+
+        if u.path == "/api/view":
+            # abre a imagem no visualizador padrao (ver em tamanho real)
+            try:
+                it = STATE["items"][int((qs.get("i") or ["-1"])[0])]
+                os.startfile(it["p"])
                 return self._json({"ok": True})
             except Exception as e:
                 return self._json({"error": str(e)}, 400)

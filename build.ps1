@@ -15,7 +15,7 @@ if (-not (Test-Path $py)) {
         onnxruntime numpy pillow tokenizers pywebview pyinstaller
 }
 
-if (-not (Test-Path (Join-Path $app 'models\clip_image.onnx'))) {
+if (-not (Test-Path (Join-Path $app 'models\image.onnx'))) {
     throw "models\ vazio. Rode: venv\Scripts\python tools\export_onnx.py"
 }
 if (-not (Test-Path (Join-Path $app 'icon.ico'))) { & $py make_icon.py }

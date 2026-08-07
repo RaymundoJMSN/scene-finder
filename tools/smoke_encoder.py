@@ -16,8 +16,10 @@ import encoder  # noqa: E402
 
 
 def main():
+    d = encoder.dim()
+    print(f"modelo: {encoder.config()['model_id']} (dim {d})")
     t = encoder.encode_texts(["tavern at night", "taverna a noite", "spaceship"])
-    assert t.shape == (3, 512), f"forma inesperada no texto: {t.shape}"
+    assert t.shape == (3, d), f"forma inesperada no texto: {t.shape}"
 
     pt_en = float(t[0] @ t[1])
     nada_a_ver = float(t[0] @ t[2])
@@ -30,7 +32,7 @@ def main():
 
     img = Image.new("RGB", (900, 600), (90, 70, 50))
     v = encoder.encode_images([img])
-    assert v.shape == (1, 512), f"forma inesperada na imagem: {v.shape}"
+    assert v.shape == (1, d), f"forma inesperada na imagem: {v.shape}"
     assert abs(float(np.linalg.norm(v[0])) - 1.0) < 1e-3, "embedding nao normalizado"
 
     print("SMOKE OK")

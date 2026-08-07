@@ -1,11 +1,12 @@
-"""Inferencia CLIP via onnxruntime - substitui torch + transformers no app.
+"""Inferencia SigLIP2 via onnxruntime - o app nao carrega torch.
 
-Mesmos pesos do sentence-transformers, so que exportados (tools/export_onnx.py).
-Sem isto o app empacotado passaria de 800 MB e demoraria ~10 s para abrir.
+Modelo exportado por tools/export_onnx.py. Trocamos o CLIP pelo SigLIP2 depois de
+medir no acervo real (tools/bench_modelos.py): acerto@1 15% -> 28%, MRR +49%.
 """
 import json
 import os
 import sys
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -42,26 +43,36 @@ _SESS_OPTS.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 _cache = {}
 
 
-def _session(name):
-    if name not in _cache:
-        _cache[name] = ort.InferenceSession(
-            str(MODELS / name), _SESS_OPTS, providers=["CPUExecutionProvider"])
-    return _cache[name]
+@lru_cache(maxsize=1)
+def config():
+    return json.loads((MODELS / "preprocess.json").read_text("utf-8"))
 
 
-def _emb_out(sess):
-    """Indice da saida (batch, 512): o grafo exportado tambem expoe estados
+def dim():
+    return config()["dim"]
+
+
+def _session(nome):
+    if nome not in _cache:
+        _cache[nome] = ort.InferenceSession(
+            str(MODELS / nome), _SESS_OPTS, providers=["CPUExecutionProvider"])
+    return _cache[nome]
+
+
+def _saida(sess):
+    """Indice da saida (batch, dim): o grafo exportado tambem expoe estados
     intermediarios, e a ordem deles nao e estavel entre exports."""
-    key = id(sess)
-    if key not in _cache:
+    chave = ("out", id(sess))
+    if chave not in _cache:
+        d = dim()
         for i, o in enumerate(sess.get_outputs()):
-            if len(o.shape) == 2 and o.shape[-1] == 512:
-                _cache[key] = i
+            if len(o.shape) == 2 and o.shape[-1] == d:
+                _cache[chave] = i
                 break
         else:
             raise RuntimeError(
-                f"nenhuma saida (batch,512) em {[o.shape for o in sess.get_outputs()]}")
-    return _cache[key]
+                f"nenhuma saida (batch,{d}) em {[o.shape for o in sess.get_outputs()]}")
+    return _cache[chave]
 
 
 def _norm(x):
@@ -70,52 +81,44 @@ def _norm(x):
 
 # ---------- imagem ----------
 
-def _preprocess(img, cfg):
-    """Resize do lado menor -> center crop -> normalize (igual CLIPImageProcessor)."""
-    size = cfg["size"]
-    img = img.convert("RGB")
-    w, h = img.size
-    scale = size / min(w, h)
-    img = img.resize((max(size, round(w * scale)), max(size, round(h * scale))),
-                     Image.BICUBIC)
-    w, h = img.size
-    left, top = (w - size) // 2, (h - size) // 2
-    img = img.crop((left, top, left + size, top + size))
+def _preprocess(img):
+    """SigLIP: redimensiona direto para o quadrado (sem center crop) e normaliza."""
+    cfg = config()
+    s = cfg["size"]
+    img = img.convert("RGB").resize((s, s), Image.BICUBIC)
     a = np.asarray(img, dtype=np.float32) / 255.0
-    a = (a - np.array(cfg["mean"], dtype=np.float32)) / np.array(cfg["std"], dtype=np.float32)
+    a = (a - np.array(cfg["mean"], np.float32)) / np.array(cfg["std"], np.float32)
     return a.transpose(2, 0, 1)  # HWC -> CHW
 
 
 def encode_images(images, batch_size=16):
-    cfg = json.loads((MODELS / "image_preprocess.json").read_text("utf-8"))
-    sess = _session("clip_image.onnx")
-    out = []
+    sess = _session("image.onnx")
+    saida = []
     for i in range(0, len(images), batch_size):
-        batch = np.stack([_preprocess(im, cfg) for im in images[i:i + batch_size]])
-        out.append(sess.run(None, {"pixel_values": batch})[_emb_out(sess)])
-    return _norm(np.vstack(out).astype(np.float32))
+        lote = np.stack([_preprocess(im) for im in images[i:i + batch_size]])
+        saida.append(sess.run(None, {"pixel_values": lote})[_saida(sess)])
+    return _norm(np.vstack(saida).astype(np.float32))
 
 
 # ---------- texto ----------
 
 def _tokenizer():
     if "tok" not in _cache:
+        cfg = config()
         t = Tokenizer.from_file(str(MODELS / "tokenizer.json"))
-        max_seq = json.loads((MODELS / "text_config.json").read_text("utf-8"))["max_seq"]
-        t.enable_truncation(max_length=max_seq)
-        t.enable_padding()
+        t.enable_truncation(max_length=cfg["max_len"])
+        # SigLIP espera comprimento fixo: sem attention_mask, o padding faz parte
+        t.enable_padding(length=cfg["max_len"], pad_id=cfg["pad_id"], pad_token="<pad>")
         _cache["tok"] = t
     return _cache["tok"]
 
 
 def encode_texts(texts, batch_size=64):
     tok = _tokenizer()
-    sess = _session("clip_text.onnx")
-    out = []
+    sess = _session("text.onnx")
+    saida = []
     for i in range(0, len(texts), batch_size):
         encs = tok.encode_batch(texts[i:i + batch_size])
         ids = np.array([e.ids for e in encs], dtype=np.int64)
-        mask = np.array([e.attention_mask for e in encs], dtype=np.int64)
-        out.append(sess.run(None, {"input_ids": ids,
-                                   "attention_mask": mask})[_emb_out(sess)])
-    return _norm(np.vstack(out).astype(np.float32))
+        saida.append(sess.run(None, {"input_ids": ids})[_saida(sess)])
+    return _norm(np.vstack(saida).astype(np.float32))

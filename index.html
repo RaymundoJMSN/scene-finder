@@ -30,9 +30,16 @@
   .card .nm { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
   .card .sb { font-size:11px; color:var(--mut); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; margin-top:2px; }
   .badge { position:absolute; top:6px; left:6px; background:#111214cc; border-radius:6px; padding:2px 7px; font-size:11px; color:var(--ac); }
-  .fold { position:absolute; top:6px; right:6px; background:#111214cc; border-radius:6px; padding:2px 7px; font-size:13px; display:none; }
-  .card:hover .fold { display:block; }
-  .fold:hover { color:var(--ac); }
+  .acoes { position:absolute; top:6px; right:6px; display:flex; gap:4px; align-items:center; }
+  .pill { background:#111214e6; border-radius:6px; padding:2px 7px; font-size:12px; line-height:1.5; display:none; }
+  .pill:hover { color:var(--ac); }
+  .card:hover .pill { display:block; }
+  .pill.vars { display:block; color:var(--ac); font-size:11px; }
+  .varbox { grid-column:1/-1; background:#0d0e10; border:1px solid var(--ac); border-radius:10px; padding:12px; margin:2px 0 6px; }
+  .vartit { font-size:12px; color:var(--mut); margin-bottom:10px; text-transform:uppercase; letter-spacing:.6px; }
+  .simtit { font-size:14px; margin-bottom:12px; color:var(--mut); }
+  .simtit b { color:var(--tx); }
+  .volta { color:var(--ac); cursor:pointer; text-decoration:underline; }
   #toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(80px); background:var(--ac); color:#04240f; font-weight:600; padding:9px 20px; border-radius:99px; transition:transform .18s; z-index:9; }
   #toast.on { transform:translateX(-50%) translateY(0); }
   .empty { color:var(--mut); font-size:13px; padding:8px 0; }
@@ -89,7 +96,7 @@
   </div>
   <section>
     <h2>Local <span id="lstat" class="st"></span></h2>
-    <div id="local" class="grid"><div class="empty">Digite e aperte Enter.</div></div>
+    <div id="local"><div class="empty">Digite e aperte Enter.</div></div>
   </section>
   <section>
     <h2>Online</h2>
@@ -123,13 +130,74 @@ async function copy(text) {
 function cardLocal(r) {
   const d = document.createElement('div');
   d.className = 'card';
+  d.title = 'clique: copiar caminho · shift+clique: abrir pasta · botão direito: ver a imagem';
+  const n = (r.variants || []).length;
   d.innerHTML = `<img loading="lazy" src="${r.thumb}">
-    <span class="fold" title="abrir pasta">📁</span>
+    <span class="acoes">
+      ${n ? `<span class="pill vars" title="ver as ${n} variantes">${n + 1} variantes</span>` : ''}
+      <span class="pill sim" title="mapas parecidos com este">≈</span>
+      <span class="pill fold" title="abrir pasta">📁</span>
+    </span>
     <div class="inf"><div class="nm">${esc(r.name)}</div>
     <div class="sb" title="${esc(r.foundry)}">${esc(r.dir)} · ${(r.score*100|0)}%</div></div>`;
-  d.onclick = () => copy(r.foundry);
-  d.querySelector('.fold').onclick = e => { e.stopPropagation(); fetch(`/api/open?i=${r.i}`); };
+
+  d.onclick = e => {
+    if (e.shiftKey) { fetch(`/api/open?i=${r.i}`); toast('abrindo a pasta'); }
+    else copy(r.foundry);
+  };
+  d.oncontextmenu = e => {
+    e.preventDefault();               // sem menu do navegador dentro do app
+    fetch(`/api/view?i=${r.i}`);
+    toast('abrindo a imagem');
+  };
+  d.querySelector('.fold').onclick = e => {
+    e.stopPropagation();
+    fetch(`/api/open?i=${r.i}`);
+    toast('abrindo a pasta');
+  };
+  d.querySelector('.sim').onclick = e => { e.stopPropagation(); similares(r.i); };
+
+  const vb = d.querySelector('.vars');
+  if (vb) vb.onclick = e => { e.stopPropagation(); expandir(d, r); };
   return d;
+}
+
+// mostra as variantes logo abaixo do card, sem sair da busca
+function expandir(card, r) {
+  const antigo = card.parentElement.querySelector('.varbox');
+  const meu = antigo && antigo.dataset.i === String(r.i);
+  if (antigo) antigo.remove();
+  if (meu) return;
+
+  const box = document.createElement('div');
+  box.className = 'varbox';
+  box.dataset.i = r.i;
+  box.innerHTML = `<div class="vartit">${esc(r.name)} — todas as variantes</div>`;
+  const g = document.createElement('div');
+  g.className = 'grid';
+  [r, ...r.variants].forEach(v => g.appendChild(cardLocal({...v, variants: []})));
+  box.appendChild(g);
+  card.parentElement.insertBefore(box, card.nextSibling);
+  box.scrollIntoView({block: 'nearest', behavior: 'smooth'});
+}
+
+async function similares(i) {
+  const el = $('#local');
+  el.innerHTML = '<div class="empty">procurando parecidos…</div>';
+  $('#online').innerHTML = '';
+  const r = await (await fetch(`/api/similar?i=${i}`)).json();
+  el.innerHTML = '';
+  if (r.base) {
+    const t = document.createElement('div');
+    t.className = 'simtit';
+    t.innerHTML = `parecidos com <b>${esc(r.base.name)}</b> · <span class="volta">voltar à busca</span>`;
+    t.querySelector('.volta').onclick = () => $('#f').requestSubmit();
+    el.appendChild(t);
+  }
+  const g = document.createElement('div');
+  g.className = 'grid';
+  (r.results || []).forEach(x => g.appendChild(cardLocal(x)));
+  el.appendChild(g);
 }
 
 function cardOnline(r) {
@@ -150,7 +218,10 @@ async function searchLocal(q) {
   el.innerHTML = '';
   if (!r.ready) { el.innerHTML = '<div class="empty">modelo carregando, tenta de novo em segundos…</div>'; return; }
   if (!r.results.length) { el.innerHTML = '<div class="empty">nada no acervo local.</div>'; return; }
-  r.results.forEach(x => el.appendChild(cardLocal(x)));
+  const g = document.createElement('div');
+  g.className = 'grid';
+  r.results.forEach(x => g.appendChild(cardLocal(x)));
+  el.appendChild(g);
 }
 
 async function searchOnline(q) {

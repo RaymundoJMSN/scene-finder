@@ -20,17 +20,17 @@ jobs:
           python-version: "3.12"
 
       # torch so serve para exportar os modelos; nao entra no pacote final
-      - name: cache dos modelos CLIP
+      - name: cache dos modelos
         uses: actions/cache@v4
         with:
           path: ~/.cache/huggingface
-          key: hf-clip-v1
+          key: hf-siglip2-v1
 
       - name: dependencias de exportacao
         run: |
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install sentence-transformers onnx onnxruntime onnxscript pillow numpy
+          pip install "transformers>=5" onnx onnxruntime onnxscript pillow numpy
 
       - name: exportar modelos ONNX
         run: python tools/export_onnx.py
