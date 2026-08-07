@@ -32,6 +32,22 @@ Atlas, JamesRPGArt e Google Imagens.
 uma pasta a esconde da busca **sem apagá-la do índice**: dá para manter uma pasta de mapas
 indexada e ligá-la só quando precisar, sem reindexar de novo a cada troca.
 
+**Pastas de peças** — acervos como o Forgotten Adventures não são mapas, e sim sprites para montar
+mapas: pequenos por natureza, e o filtro padrão (≥1024 px) descarta quase tudo. Uma pasta pode ter
+regras próprias no `config.json`:
+
+```json
+"folders": [
+  "X:\\FoundryVTT\\Data\\Assets\\Scenes",
+  { "caminho": "X:\\FoundryVTT\\Data\\Assets\\FA",
+    "min_side": 256, "min_kb": 10, "ignorar": ["FA_Assets"] }
+]
+```
+
+`ignorar` pula subpastas pelo nome — útil quando o acervo traz o mesmo conteúdo duas vezes em
+formatos diferentes. Combinando com o interruptor, a pasta de peças fica desligada no dia a dia e
+você a liga quando precisa achar uma lápide ou um barril.
+
 ## Instalação
 
 Baixe o `SceneFinder-Setup-x.y.z.exe` em [Releases](../../releases) e execute. Instala por usuário,

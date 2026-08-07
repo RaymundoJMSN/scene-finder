@@ -90,22 +90,47 @@ def load_config():
     return cfg
 
 
+def pastas(cfg):
+    """Normaliza `folders` para dicionarios com opcoes proprias.
+
+    Aceita os dois formatos: a string simples de sempre e o dicionario
+    {"caminho", "min_side", "min_kb", "ignorar"}. Assim uma pasta de PECAS
+    (sprites de decoracao, pequenos por natureza) pode entrar com um limite
+    diferente do usado para cenas, sem afetar o resto do acervo.
+    """
+    saida = []
+    for f in cfg.get("folders", []):
+        d = {"caminho": f} if isinstance(f, str) else dict(f)
+        d.setdefault("min_side", cfg.get("min_side", 1024))
+        d.setdefault("min_kb", MIN_BYTES // 1024)
+        d.setdefault("ignorar", [])
+        saida.append(d)
+    return saida
+
+
+def caminho_de(f):
+    return f if isinstance(f, str) else f.get("caminho", "")
+
+
 def scan(cfg, conhecidos=None):
-    """Caminhos absolutos de imagens que parecem mapa (lado menor >= min_side).
+    """Caminhos absolutos de imagens que parecem mapa.
 
     `conhecidos`: {caminho normalizado: mtime} de itens que ja estao no indice.
     Para eles o filtro de tamanho e reaproveitado em vez de reabrir a imagem.
     """
-    min_side = cfg.get("min_side", 1024)
     conhecidos = conhecidos or {}
     out, vistos = [], set()
-    for folder in cfg["folders"]:
-        root = Path(folder)
+    for opt in pastas(cfg):
+        root = Path(opt["caminho"])
+        min_side = opt["min_side"]
+        min_bytes = opt["min_kb"] * 1024
+        ignorar = {i.lower() for i in opt["ignorar"]}
         if not root.is_dir():
             log.info("pasta inexistente: %s", root)
             continue
         for dirpath, dirnames, filenames in os.walk(root):
-            dirnames[:] = [d for d in dirnames if d.lower() not in EXCL_DIRS]
+            dirnames[:] = [d for d in dirnames
+                           if d.lower() not in EXCL_DIRS and d.lower() not in ignorar]
             for fn in filenames:
                 p = Path(dirpath) / fn
                 if p.suffix.lower() not in EXTS or p.stem.lower().endswith("-thumb"):
@@ -115,7 +140,7 @@ def scan(cfg, conhecidos=None):
                     continue
                 try:
                     st = p.stat()
-                    if st.st_size < MIN_BYTES:
+                    if st.st_size < min_bytes:
                         continue
                     # ja indexado e intacto: ele passou por este mesmo filtro
                     # antes, entao nao precisa abrir o arquivo de novo. E isto
@@ -312,10 +337,17 @@ def _embed_seguro(arrays):
         return np.array(saida, dtype=np.float32), ok
 
 
+def assinatura_criterio(cfg):
+    """Resume as regras de filtro. Se mudarem, o atalho do scan nao vale mais."""
+    return json.dumps(
+        sorted([os.path.normcase(p["caminho"]), p["min_side"], p["min_kb"],
+                sorted(x.lower() for x in p["ignorar"])] for p in pastas(cfg)))
+
+
 def _criterio_salvo(out):
-    """min_side com que o indice atual foi filtrado (None se desconhecido)."""
+    """Regras com que o indice atual foi filtrado (None se desconhecido)."""
     try:
-        return json.loads((Path(out) / "meta.json").read_text("utf-8")).get("min_side")
+        return json.loads((Path(out) / "meta.json").read_text("utf-8")).get("criterio")
     except Exception:
         return None
 
@@ -344,7 +376,7 @@ def _salvar(out, kept_rows, kept_items, old_emb, new_embs, new_items,
             os.replace(buf.name, out / "names.npz")
 
     _atomic_write(out / "meta.json",
-                  json.dumps({"items": items, "min_side": min_side}).encode("utf-8"))
+                  json.dumps({"items": items, "criterio": min_side}).encode("utf-8"))
     return items
 
 
@@ -360,9 +392,9 @@ def build_index(cfg, out=APP, progress=None, limit=None, plano=None):
     old = {os.path.normcase(it["p"]): (it["m"], i)
            for i, it in enumerate(old_items)}
 
-    # o filtro de tamanho so pode ser reaproveitado se o criterio for o mesmo;
-    # se min_side mudou, todo arquivo precisa ser reavaliado
-    criterio = cfg.get("min_side", 1024)
+    # o filtro de tamanho so pode ser reaproveitado se as regras forem as
+    # mesmas; se mudaram, todo arquivo precisa ser reavaliado
+    criterio = assinatura_criterio(cfg)
     reaproveitar = (_criterio_salvo(out) == criterio)
     files = scan(cfg, {k: v[0] for k, v in old.items()} if reaproveitar else None)
     if limit:

@@ -326,16 +326,21 @@ async function renderPastas() {
   el.innerHTML = '';
   if (!CFG.folders.length) { el.innerHTML = '<div class="empty">Nenhuma pasta. Adicione onde ficam seus mapas.</div>'; return; }
   CFG.folders.forEach((f, i) => {
-    const st = info.find(x => x.path === f) || {on: true, itens: 0};
+    const cam = (typeof f === 'string') ? f : (f.caminho || '');
+    const st = info.find(x => x.path === cam) || {on: true, itens: 0};
     const d = document.createElement('div');
     d.className = 'pasta' + (st.on ? '' : ' off');
+    // pasta com filtro proprio (peças) merece aviso: o padrão é outro
+    const regra = (st.min_side && st.min_side !== 1024)
+      ? `<span class="cnt" title="filtro próprio desta pasta">≥${st.min_side}px</span>` : '';
     d.innerHTML = `<span class="sw ${st.on ? 'on' : ''}">${st.on ? '● na busca' : '○ oculta'}</span>
-      <code title="${esc(f)}">${esc(f)}</code>
+      <code title="${esc(cam)}">${esc(cam)}</code>
+      ${regra}
       <span class="cnt">${st.itens} imagens</span>
       <button>remover</button>`;
     d.querySelector('.sw').onclick = async () => {
       await fetch('/api/toggle', {method:'POST',
-        body: JSON.stringify({tipo:'pasta', alvo:f, on: !st.on})});
+        body: JSON.stringify({tipo:'pasta', alvo:cam, on: !st.on})});
       toast(st.on ? 'pasta oculta da busca' : 'pasta de volta na busca');
       await renderPastas();
       if (lastQ) searchLocal(lastQ);

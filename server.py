@@ -64,8 +64,9 @@ def atualizar_mascara():
 
 def contar_por_pasta():
     """Quantos itens do indice caem em cada pasta configurada."""
-    contas = {f: 0 for f in CFG.get("folders", [])}
-    normal = {_norm_dir(f): f for f in contas}
+    caminhos = [indexer.caminho_de(f) for f in CFG.get("folders", [])]
+    contas = {c: 0 for c in caminhos}
+    normal = {_norm_dir(c): c for c in caminhos}
     for it in STATE["items"]:
         p = _norm_dir(it["p"])
         for n, original in normal.items():
@@ -498,10 +499,14 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/folders":
             contas = contar_por_pasta()
             off = {_norm_dir(f) for f in (CFG.get("folders_off") or [])}
-            return self._json([
-                {"path": f, "itens": contas.get(f, 0),
-                 "on": _norm_dir(f) not in off}
-                for f in CFG.get("folders", [])])
+            saida = []
+            for opt in indexer.pastas(CFG):
+                c = opt["caminho"]
+                saida.append({"path": c, "itens": contas.get(c, 0),
+                              "on": _norm_dir(c) not in off,
+                              "min_side": opt["min_side"],
+                              "min_kb": opt["min_kb"]})
+            return self._json(saida)
 
         if u.path == "/api/config":
             sug = indexer.find_foundry()
