@@ -40,13 +40,22 @@ regras próprias no `config.json`:
 "folders": [
   "X:\\FoundryVTT\\Data\\Assets\\Scenes",
   { "caminho": "X:\\FoundryVTT\\Data\\Assets\\FA",
-    "min_side": 256, "min_kb": 10, "ignorar": ["FA_Assets"] }
+    "tudo": true, "ignorar": ["FA_Assets"] }
 ]
 ```
 
-`ignorar` pula subpastas pelo nome — útil quando o acervo traz o mesmo conteúdo duas vezes em
-formatos diferentes. Combinando com o interruptor, a pasta de peças fica desligada no dia a dia e
-você a liga quando precisa achar uma lápide ou um barril.
+| Campo | O que faz |
+|---|---|
+| `tudo` | indexa **toda** imagem da pasta: sem filtro de tamanho e sem descartar tokens, ícones ou miniaturas |
+| `min_side` / `min_kb` | limites próprios, quando você não quer nem o padrão nem tudo |
+| `ignorar` | pula subpastas pelo nome |
+
+`ignorar` resolve o caso comum de o acervo trazer o mesmo conteúdo duas vezes em formatos
+diferentes — no Forgotten Adventures, `FA_Assets` e `FA_Assets_Webp` são as mesmas imagens, e
+indexar as duas só geraria trabalho e resultado repetidos.
+
+Combinando com o interruptor, uma pasta de peças pode ficar desligada no dia a dia e ser ligada só
+quando você precisa achar uma lápide ou um barril.
 
 ## Instalação
 

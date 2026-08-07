@@ -101,9 +101,15 @@ def pastas(cfg):
     saida = []
     for f in cfg.get("folders", []):
         d = {"caminho": f} if isinstance(f, str) else dict(f)
+        if d.get("tudo"):
+            # sem nenhum filtro: entra toda imagem, inclusive miniaturas,
+            # tokens e retratos que normalmente sao descartados
+            d.setdefault("min_side", 0)
+            d.setdefault("min_kb", 0)
         d.setdefault("min_side", cfg.get("min_side", 1024))
         d.setdefault("min_kb", MIN_BYTES // 1024)
         d.setdefault("ignorar", [])
+        d.setdefault("tudo", False)
         saida.append(d)
     return saida
 
@@ -125,15 +131,19 @@ def scan(cfg, conhecidos=None):
         min_side = opt["min_side"]
         min_bytes = opt["min_kb"] * 1024
         ignorar = {i.lower() for i in opt["ignorar"]}
+        tudo = opt["tudo"]
+        excluidas = set() if tudo else EXCL_DIRS
         if not root.is_dir():
             log.info("pasta inexistente: %s", root)
             continue
         for dirpath, dirnames, filenames in os.walk(root):
             dirnames[:] = [d for d in dirnames
-                           if d.lower() not in EXCL_DIRS and d.lower() not in ignorar]
+                           if d.lower() not in excluidas and d.lower() not in ignorar]
             for fn in filenames:
                 p = Path(dirpath) / fn
-                if p.suffix.lower() not in EXTS or p.stem.lower().endswith("-thumb"):
+                if p.suffix.lower() not in EXTS:
+                    continue
+                if not tudo and p.stem.lower().endswith("-thumb"):
                     continue
                 chave = os.path.normcase(str(p))
                 if chave in vistos:      # pastas configuradas que se sobrepoem
