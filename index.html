@@ -55,6 +55,17 @@
   .pasta button { padding:2px 9px; }
   #novaPasta { flex:1; min-width:200px; padding:7px 11px; border-radius:8px; border:1px solid var(--bd); background:var(--bg); color:var(--tx); font-size:13px; }
   .dim { color:var(--mut); font-size:12px; margin-top:10px; }
+  .dica { font-weight:400; text-transform:none; letter-spacing:0; opacity:.75; margin-left:8px; }
+  .chips { display:flex; flex-wrap:wrap; gap:8px; }
+  .chip { display:flex; align-items:center; gap:7px; background:var(--card2); border:1px solid var(--bd); border-radius:999px; padding:5px 13px; font-size:13px; cursor:pointer; user-select:none; }
+  .chip:hover { border-color:var(--ac); }
+  .chip.off { opacity:.45; }
+  .chip .dot { width:8px; height:8px; border-radius:50%; background:var(--ac); }
+  .chip.off .dot { background:var(--mut); }
+  .pasta .sw { cursor:pointer; user-select:none; padding:2px 8px; border-radius:6px; border:1px solid var(--bd); font-size:12px; }
+  .pasta .sw.on { color:var(--ac); border-color:var(--ac); }
+  .pasta.off code { opacity:.45; text-decoration:line-through; }
+  .pasta .cnt { color:var(--mut); font-size:12px; white-space:nowrap; }
 </style>
 </head>
 <body>
@@ -83,7 +94,7 @@
 </header>
 <main>
   <div id="cfg">
-    <h4>Pastas indexadas</h4>
+    <h4>Pastas indexadas <span class="dica">desmarque para esconder da busca (sem reindexar)</span></h4>
     <div id="pastas"></div>
     <div class="row" style="margin-top:10px">
       <input id="novaPasta" placeholder="caminho da pasta com seus mapas">
@@ -92,6 +103,8 @@
       <span style="flex:1"></span>
       <button id="salvarCfg">Salvar e reindexar</button>
     </div>
+    <h4 style="margin-top:18px">Fontes online</h4>
+    <div id="fontes" class="chips"></div>
     <div class="dim" id="cfgInfo"></div>
   </div>
   <section>
@@ -107,8 +120,13 @@
 <script>
 const $ = s => document.querySelector(s);
 // promise, nao array: buscar logo ao abrir nao pode perder as fontes online
-const SOURCES = fetch('/api/sources').then(r => r.json()).catch(() => []);
+let SOURCES = fetch('/api/sources').then(r => r.json()).catch(() => ({ativas: [], todas: []}));
 let lastQ = '';
+
+function recarregarFontes() {
+  SOURCES = fetch('/api/sources').then(r => r.json()).catch(() => ({ativas: [], todas: []}));
+  return SOURCES;
+}
 
 const esc = s => { const d = document.createElement('div'); d.textContent = s ?? ''; return d.innerHTML; };
 
@@ -227,7 +245,9 @@ async function searchLocal(q) {
 async function searchOnline(q) {
   const on = $('#online');
   on.innerHTML = '';
-  (await SOURCES).forEach(s => {
+  const fontes = (await SOURCES).ativas || [];
+  if (!fontes.length) { on.innerHTML = '<div class="empty">nenhuma fonte online ligada (⚙ Pastas).</div>'; return; }
+  fontes.forEach(s => {
     const sec = document.createElement('div');
     sec.innerHTML = `<h3>${esc(s.label)} <span class="st">carregando…</span></h3><div class="grid"></div>`;
     on.appendChild(sec);
@@ -292,23 +312,55 @@ pollStatus(false);
 // ---------- pastas ----------
 let CFG = null;
 
-function renderPastas() {
+async function renderPastas() {
   const el = $('#pastas');
+  const info = await (await fetch('/api/folders')).json();
   el.innerHTML = '';
-  if (!CFG.folders.length) el.innerHTML = '<div class="empty">Nenhuma pasta. Adicione onde ficam seus mapas.</div>';
+  if (!CFG.folders.length) { el.innerHTML = '<div class="empty">Nenhuma pasta. Adicione onde ficam seus mapas.</div>'; return; }
   CFG.folders.forEach((f, i) => {
+    const st = info.find(x => x.path === f) || {on: true, itens: 0};
     const d = document.createElement('div');
-    d.className = 'pasta';
-    d.innerHTML = `<code title="${esc(f)}">${esc(f)}</code><button>remover</button>`;
+    d.className = 'pasta' + (st.on ? '' : ' off');
+    d.innerHTML = `<span class="sw ${st.on ? 'on' : ''}">${st.on ? '● na busca' : '○ oculta'}</span>
+      <code title="${esc(f)}">${esc(f)}</code>
+      <span class="cnt">${st.itens} imagens</span>
+      <button>remover</button>`;
+    d.querySelector('.sw').onclick = async () => {
+      await fetch('/api/toggle', {method:'POST',
+        body: JSON.stringify({tipo:'pasta', alvo:f, on: !st.on})});
+      toast(st.on ? 'pasta oculta da busca' : 'pasta de volta na busca');
+      await renderPastas();
+      if (lastQ) searchLocal(lastQ);
+    };
     d.querySelector('button').onclick = () => { CFG.folders.splice(i, 1); renderPastas(); };
     el.appendChild(d);
+  });
+}
+
+async function renderFontes() {
+  const el = $('#fontes');
+  const { todas } = await (await fetch('/api/sources')).json();
+  el.innerHTML = '';
+  (todas || []).forEach(s => {
+    const c = document.createElement('span');
+    c.className = 'chip' + (s.on ? '' : ' off');
+    c.innerHTML = `<span class="dot"></span>${esc(s.label)}`;
+    c.onclick = async () => {
+      await fetch('/api/toggle', {method:'POST',
+        body: JSON.stringify({tipo:'fonte', alvo:s.id, on: !s.on})});
+      await recarregarFontes();
+      await renderFontes();
+      if (lastQ) searchOnline(lastQ);
+    };
+    el.appendChild(c);
   });
 }
 
 async function abrirCfg() {
   const r = await (await fetch('/api/config')).json();
   CFG = r.config;
-  renderPastas();
+  await renderPastas();
+  await renderFontes();
   $('#cfgInfo').textContent =
     `versão ${r.version} · dados em ${r.data_dir}` +
     (r.sugestao && !CFG.folders.length ? ` · Foundry detectado: ${r.sugestao}` : '');
@@ -343,6 +395,10 @@ $('#salvarCfg').onclick = async () => {
   await fetch('/api/reindex', {method:'POST'});
   pollStatus(true);
 };
+
+$('#novaPasta').addEventListener('keydown', e => {
+  if (e.key === 'Enter') { e.preventDefault(); $('#addPasta').click(); }
+});
 
 // ---------- update ----------
 async function checarUpdate() {

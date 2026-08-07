@@ -31,11 +31,14 @@ UA = ("Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
       "(KHTML, like Gecko) Chrome/126.0.0.0 Safari/537.36")
 PROXY_HOSTS = ("redd.it", "reddit.com", "redditmedia.com",
                "kemono.cr", "czepeku.com", "encounterkit.com")
-CZEPEKU_PAGES = ["fantasy/scenes", "fantasy/maps", "scifi/scenes", "scifi/maps"]
 CZEPEKU_CACHE = DATA / "czepeku_cache.json"
+ptbr.usar_cache(DATA / "traducoes.json")   # traducoes ficam junto dos dados
+
+CZEPEKU_CATS = ["fantasy/scenes", "fantasy/maps", "scifi/scenes", "scifi/maps"]
 
 STATE = {
     "emb": None, "items": [], "nemb": None, "ready": False,   # busca local
+    "mask": None,          # pastas visiveis (None = todas)
     "idx": {"running": False, "done": 0, "total": 0, "error": None},
 }
 SEARCH_LOCK = threading.Lock()
@@ -43,10 +46,40 @@ SEARCH_LOCK = threading.Lock()
 ONLINE_CACHE = {}
 
 
+def _norm_dir(p):
+    return str(p).replace("/", "\\").rstrip("\\").lower()
+
+
+def atualizar_mascara():
+    """Recalcula quais itens a busca enxerga, a partir de folders_off."""
+    off = [_norm_dir(f) for f in (CFG.get("folders_off") or [])]
+    itens = STATE["items"]
+    if not off or not itens:
+        STATE["mask"] = None
+        return
+    STATE["mask"] = np.array(
+        [not any(_norm_dir(it["p"]).startswith(o + "\\") for o in off)
+         for it in itens], dtype=bool)
+
+
+def contar_por_pasta():
+    """Quantos itens do indice caem em cada pasta configurada."""
+    contas = {f: 0 for f in CFG.get("folders", [])}
+    normal = {_norm_dir(f): f for f in contas}
+    for it in STATE["items"]:
+        p = _norm_dir(it["p"])
+        for n, original in normal.items():
+            if p.startswith(n + "\\"):
+                contas[original] += 1
+                break
+    return contas
+
+
 def _boot():
     STATE["emb"], STATE["items"] = indexer.load_index()
     indexer.encoder.encode_texts(["warmup"])  # carrega a sessao ONNX antes da 1a busca
     STATE["nemb"] = indexer.load_name_index(STATE["items"])
+    atualizar_mascara()
     STATE["ready"] = True
     # sem indice mas com pastas configuradas = primeira execucao ou troca de
     # modelo (o indice antigo vira incompativel). Reindexa sem o usuario pedir.
@@ -146,13 +179,22 @@ def src_kemono(q, i):
     return out
 
 
+# suba quando o formato dos itens mudar, senao o cache antigo (sem os campos
+# novos) continua sendo servido ate expirar
+CZEPEKU_CACHE_V = 2
+
+
 def _czepeku_catalog():
     if CZEPEKU_CACHE.exists():
-        cache = json.loads(CZEPEKU_CACHE.read_text("utf-8"))
-        if time.time() - cache["fetched"] < 86400:
-            return cache["items"]
+        try:
+            cache = json.loads(CZEPEKU_CACHE.read_text("utf-8"))
+            if (cache.get("v") == CZEPEKU_CACHE_V
+                    and time.time() - cache["fetched"] < 86400):
+                return cache["items"]
+        except Exception:
+            pass
     items = []
-    for page in CZEPEKU_PAGES:
+    for page in CZEPEKU_CATS:
         try:
             html, _ = _http_get(f"https://www.czepeku.com/{page}", timeout=15)
             html = html.decode("utf-8", "ignore")
@@ -168,6 +210,7 @@ def _czepeku_catalog():
                     "thumb": (src.group(1).replace("width=1920", "width=480")
                               if src else ""),
                     "source": f"czepeku {cat}/{kind}",
+                    "cat": f"{cat}/{kind}",
                 })
         except Exception:
             continue
@@ -178,15 +221,21 @@ def _czepeku_catalog():
             uniq.append(it)
     if uniq:
         CZEPEKU_CACHE.write_text(
-            json.dumps({"fetched": time.time(), "items": uniq}), "utf-8")
+            json.dumps({"v": CZEPEKU_CACHE_V, "fetched": time.time(),
+                        "items": uniq}), "utf-8")
     return uniq
 
 
-def src_czepeku(q):
-    """Ranqueia por quantos termos batem no titulo (frase inteira raramente bate)."""
+def src_czepeku(q, cat=None):
+    """Ranqueia por quantos termos batem no titulo (frase inteira raramente bate).
+
+    `cat` limita a uma das quatro secoes do site (fantasy/scifi x scenes/maps).
+    """
     words = [w.lower() for w in q.split() if len(w) > 2] or [q.lower()]
     hits = []
     for it in _czepeku_catalog():
+        if cat and it.get("cat") != cat:
+            continue
         t = it["title"].lower()
         n = sum(1 for w in words if w in t)
         if n:
@@ -280,7 +329,28 @@ class H(BaseHTTPRequestHandler):
                 return self._json({"error": str(e)}, 400)
             CFG.update({k: v for k, v in novo.items() if k in indexer.DEFAULT_CONFIG})
             indexer.save_config(CFG)
+            atualizar_mascara()
             return self._json({"ok": True, "config": CFG})
+
+        if path == "/api/toggle":
+            # liga/desliga pasta local ou fonte online sem reindexar nada
+            n = int(self.headers.get("Content-Length") or 0)
+            try:
+                d = json.loads(self.rfile.read(n) or b"{}")
+                tipo, alvo, ligado = d["tipo"], d["alvo"], bool(d["on"])
+            except Exception as e:
+                return self._json({"error": str(e)}, 400)
+            chave = "folders_off" if tipo == "pasta" else "sources_off"
+            desligados = [x for x in (CFG.get(chave) or [])]
+            igual = (_norm_dir if tipo == "pasta" else str)
+            desligados = [x for x in desligados if igual(x) != igual(alvo)]
+            if not ligado:
+                desligados.append(alvo)
+            CFG[chave] = desligados
+            indexer.save_config(CFG)
+            if tipo == "pasta":
+                atualizar_mascara()
+            return self._json({"ok": True, chave: desligados})
 
         if path == "/api/update/download":
             updater.download_async()
@@ -314,7 +384,8 @@ class H(BaseHTTPRequestHandler):
                 # busca fundo porque o agrupamento colapsa muitos resultados
                 # num card so; sem isso a tela ficaria com poucos mapas
                 res = indexer.search(q, STATE["emb"], STATE["items"],
-                                     alvo * 8, nemb=STATE["nemb"]) if q else []
+                                     alvo * 8, nemb=STATE["nemb"],
+                                     mask=STATE["mask"]) if q else []
             return self._json({"ready": True,
                                "results": _formatar(res, True)[:alvo]})
 
@@ -327,7 +398,10 @@ class H(BaseHTTPRequestHandler):
                 alvo = CFG.get("top_k", 60)
                 with SEARCH_LOCK:
                     scores = STATE["emb"] @ STATE["emb"][gi]
-                    ordem = np.argsort(-scores)[:alvo * 10]
+                    if STATE["mask"] is not None:
+                        scores = np.where(STATE["mask"], scores, -np.inf)
+                    ordem = [j for j in np.argsort(-scores)[:alvo * 10]
+                             if np.isfinite(scores[j])]
                 # tira o proprio mapa: quem pede "parecidos" quer OUTROS mapas,
                 # nao as 40 variantes deste
                 base_key = indexer.map_key(STATE["items"][gi]["p"])
@@ -351,6 +425,8 @@ class H(BaseHTTPRequestHandler):
                     r = src_reddit(qe)
                 elif src.startswith("kemono:"):
                     r = src_kemono(qe, int(src.split(":")[1]))
+                elif src.startswith("czepeku:"):
+                    r = src_czepeku(qe, src.split(":", 1)[1])
                 elif src == "czepeku":
                     r = src_czepeku(qe)
                 else:
@@ -358,7 +434,7 @@ class H(BaseHTTPRequestHandler):
                 ONLINE_CACHE[ck] = (time.time(), r)
                 return self._json({"results": r, "q": qe})
             except Exception as e:
-                return self._json({"results": [], "error": str(e)})
+                return self._json({"results": [], "q": qe, "error": str(e)})
 
         if u.path == "/api/img":
             url = (qs.get("u") or [""])[0]
@@ -397,12 +473,26 @@ class H(BaseHTTPRequestHandler):
             return self._json({"error": "url"}, 400)
 
         if u.path == "/api/sources":
+            off = set(CFG.get("sources_off") or [])
             srcs = [{"id": "reddit", "label": "Reddit"}]
             for i, c in enumerate(CFG.get("kemono", [])):
                 srcs.append({"id": f"kemono:{i}",
                              "label": c.get("name") or f"kemono {i}"})
-            srcs.append({"id": "czepeku", "label": "Czepeku"})
-            return self._json(srcs)
+            for cat in CZEPEKU_CATS:
+                srcs.append({"id": f"czepeku:{cat}", "label": f"Czepeku {cat}"})
+            for s in srcs:
+                s["on"] = s["id"] not in off
+            # a busca so dispara as ligadas; a lista completa alimenta os filtros
+            return self._json({"todas": srcs,
+                               "ativas": [s for s in srcs if s["on"]]})
+
+        if u.path == "/api/folders":
+            contas = contar_por_pasta()
+            off = {_norm_dir(f) for f in (CFG.get("folders_off") or [])}
+            return self._json([
+                {"path": f, "itens": contas.get(f, 0),
+                 "on": _norm_dir(f) not in off}
+                for f in CFG.get("folders", [])])
 
         if u.path == "/api/config":
             sug = indexer.find_foundry()

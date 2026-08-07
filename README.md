@@ -7,7 +7,7 @@ Ele foi feito porque procurar cena para a sessão significava abrir cinco abas e
 porque as ferramentas prontas que fazem isso demoravam minutos por busca. Aqui a busca local
 responde em menos de um décimo de segundo.
 
-![versão](https://img.shields.io/badge/vers%C3%A3o-1.1.0-4ade80) ![licença](https://img.shields.io/badge/licen%C3%A7a-MIT-blue)
+![versão](https://img.shields.io/badge/vers%C3%A3o-1.2.0-4ade80) ![licença](https://img.shields.io/badge/licen%C3%A7a-MIT-blue)
 
 ## O que ele faz
 
@@ -22,9 +22,15 @@ isso, um único mapa tomaria a tela inteira. O botão **≈** procura mapas visu
 aquele.
 
 **Fontes online** — a mesma busca consulta em paralelo o Reddit (r/battlemaps, r/dndmaps,
-r/FantasyMaps), o catálogo do Czepeku e criadores que você configurar. Como esses sites só casam
-texto em inglês, o app traduz a consulta e mostra qual termo usou. Ainda há botões para abrir Lost
-Atlas, JamesRPGArt e Google Imagens com o mesmo termo.
+r/FantasyMaps), o Czepeku (separado em fantasy/scifi × scenes/maps) e criadores que você
+configurar. Como esses sites só casam texto em inglês, a consulta é traduzida antes — por um
+dicionário embutido de termos de cenário e, quando ele não dá conta da frase, por um tradutor
+online com cache. A interface mostra qual termo foi usado de fato. Ainda há botões para abrir Lost
+Atlas, JamesRPGArt e Google Imagens.
+
+**Filtros** — em **⚙ Pastas** cada pasta indexada e cada fonte online tem um interruptor. Desligar
+uma pasta a esconde da busca **sem apagá-la do índice**: dá para manter uma pasta de mapas
+indexada e ligá-la só quando precisar, sem reindexar de novo a cada troca.
 
 ## Instalação
 

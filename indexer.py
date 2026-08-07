@@ -37,6 +37,10 @@ log = logging.getLogger(__name__)
 DEFAULT_CONFIG = {
     "foundry_data": "",
     "folders": [],
+    # pastas indexadas mas escondidas da busca: permite manter uma pasta no
+    # indice e liga-la so quando precisar, sem reindexar de novo
+    "folders_off": [],
+    "sources_off": [],          # fontes online desligadas (mesma ideia)
     "min_side": 1024,
     "port": 8060,
     "top_k": 60,
@@ -322,8 +326,12 @@ NAME_SEM_WEIGHT = 0.5
 NAME_LIT_WEIGHT = 0.25
 
 
-def search(query, emb, items, top_k=60, nemb=None):
-    """Semantica da imagem + do nome + match literal -> [(score, indice)]."""
+def search(query, emb, items, top_k=60, nemb=None, mask=None):
+    """Semantica da imagem + do nome + match literal -> [(score, indice)].
+
+    `mask`: array booleano do tamanho do indice; False esconde o item da busca
+    sem tira-lo do indice (permite ligar/desligar pastas sem reindexar).
+    """
     if not len(items):
         return []
     q = encoder.encode_texts([query])[0]
@@ -339,8 +347,12 @@ def search(query, emb, items, top_k=60, nemb=None):
             dtype=np.float32, count=len(items))
         scores = scores + NAME_LIT_WEIGHT * lit
 
+    if mask is not None:
+        scores = np.where(mask, scores, -np.inf)
+
     idx = np.argsort(-scores)[:top_k]
-    return [(float(scores[i]), int(i)) for i in idx]  # indice global p/ /api/open
+    return [(float(scores[i]), int(i)) for i in idx
+            if np.isfinite(scores[i])]  # indice global p/ /api/open
 
 
 def _check():
