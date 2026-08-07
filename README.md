@@ -42,9 +42,13 @@ estiverem em outro lugar, use **⚙ Pastas** para apontar os diretórios e clica
 indexa em seguida.
 
 A indexação usa a GPU quando há uma (DirectML: AMD, NVIDIA ou Intel) e cai para o processador
-quando não há. Medido numa RX 9070 XT com Ryzen 7: ~150 imagens por minuto. Ela **grava o progresso
-periodicamente**, então dá para fechar o app no meio e continuar depois — e arquivo já indexado é
-pulado pelo caminho e data de modificação, o que torna as indexações seguintes quase instantâneas.
+quando não há. Medido numa RX 9070 XT com Ryzen 7: ~500 imagens por minuto. Ela **grava o progresso
+periodicamente**, então dá para fechar o app no meio e continuar depois.
+
+**Acrescentar uma pasta não reindexa o resto.** O índice é incremental: imagem já indexada é
+reconhecida pelo caminho e data de modificação e nem é aberta de novo. Num acervo de 22.500
+imagens, acrescentar uma pasta pequena leva ~12 segundos, e mandar atualizar sem nenhuma mudança
+leva ~4. O botão diz quantas imagens são novas antes de começar.
 
 O app avisa quando há versão nova, baixa e abre o instalador — suas configurações são preservadas.
 Quando uma atualização troca o modelo de busca, o índice antigo deixa de servir e ele se reconstrói

@@ -249,13 +249,18 @@ def src_czepeku(q, cat=None):
 def start_reindex():
     if STATE["idx"]["running"]:
         return
-    STATE["idx"] = {"running": True, "done": 0, "total": 0, "error": None}
+    STATE["idx"] = {"running": True, "done": 0, "total": 0, "error": None,
+                    "novos": None, "ja": 0}
 
     def run():
         try:
             def prog(d, t):
                 STATE["idx"]["done"], STATE["idx"]["total"] = d, t
-            indexer.build_index(CFG, progress=prog)
+
+            def plano(ja, novos):
+                STATE["idx"]["ja"], STATE["idx"]["novos"] = ja, novos
+
+            indexer.build_index(CFG, progress=prog, plano=plano)
             STATE["emb"], STATE["items"] = indexer.load_index()
             # sem isto o peso semantico do nome fica desligado (ou pior,
             # desalinhado) ate alguem reiniciar o app

@@ -90,10 +90,15 @@ def load_config():
     return cfg
 
 
-def scan(cfg):
-    """Caminhos absolutos de imagens que parecem mapa (lado menor >= min_side)."""
+def scan(cfg, conhecidos=None):
+    """Caminhos absolutos de imagens que parecem mapa (lado menor >= min_side).
+
+    `conhecidos`: {caminho normalizado: mtime} de itens que ja estao no indice.
+    Para eles o filtro de tamanho e reaproveitado em vez de reabrir a imagem.
+    """
     min_side = cfg.get("min_side", 1024)
-    out = []
+    conhecidos = conhecidos or {}
+    out, vistos = [], set()
     for folder in cfg["folders"]:
         root = Path(folder)
         if not root.is_dir():
@@ -105,15 +110,25 @@ def scan(cfg):
                 p = Path(dirpath) / fn
                 if p.suffix.lower() not in EXTS or p.stem.lower().endswith("-thumb"):
                     continue
+                chave = os.path.normcase(str(p))
+                if chave in vistos:      # pastas configuradas que se sobrepoem
+                    continue
                 try:
-                    if p.stat().st_size < MIN_BYTES:
+                    st = p.stat()
+                    if st.st_size < MIN_BYTES:
                         continue
-                    with Image.open(p) as im:
-                        if min(im.size) < min_side:
-                            continue
+                    # ja indexado e intacto: ele passou por este mesmo filtro
+                    # antes, entao nao precisa abrir o arquivo de novo. E isto
+                    # que faz "adicionar uma pasta" custar segundos em vez de
+                    # reabrir o cabecalho de 22 mil imagens.
+                    if abs(conhecidos.get(chave, -1) - st.st_mtime) > 1e-6:
+                        with Image.open(p) as im:
+                            if min(im.size) < min_side:
+                                continue
                 except Exception as e:
                     log.info("ilegivel no scan: %s (%s)", p, e)
                     continue
+                vistos.add(chave)
                 out.append(str(p))
     return out
 
@@ -297,8 +312,16 @@ def _embed_seguro(arrays):
         return np.array(saida, dtype=np.float32), ok
 
 
+def _criterio_salvo(out):
+    """min_side com que o indice atual foi filtrado (None se desconhecido)."""
+    try:
+        return json.loads((Path(out) / "meta.json").read_text("utf-8")).get("min_side")
+    except Exception:
+        return None
+
+
 def _salvar(out, kept_rows, kept_items, old_emb, new_embs, new_items,
-            old_nemb=None, new_nembs=None):
+            old_nemb=None, new_nembs=None, min_side=None):
     """Grava indice + nomes + meta de forma atomica. Serve tanto para o
     checkpoint quanto para o fim: o que esta em disco fica sempre consistente."""
     d = encoder.dim()
@@ -320,11 +343,12 @@ def _salvar(out, kept_rows, kept_items, old_emb, new_embs, new_items,
             buf.close()
             os.replace(buf.name, out / "names.npz")
 
-    _atomic_write(out / "meta.json", json.dumps({"items": items}).encode("utf-8"))
+    _atomic_write(out / "meta.json",
+                  json.dumps({"items": items, "min_side": min_side}).encode("utf-8"))
     return items
 
 
-def build_index(cfg, out=APP, progress=None, limit=None):
+def build_index(cfg, out=APP, progress=None, limit=None, plano=None):
     """Incremental: chave path+mtime. Retorna dict de contagens."""
     out = Path(out)
     thumbs_dir = out / "thumbs"
@@ -336,7 +360,11 @@ def build_index(cfg, out=APP, progress=None, limit=None):
     old = {os.path.normcase(it["p"]): (it["m"], i)
            for i, it in enumerate(old_items)}
 
-    files = scan(cfg)
+    # o filtro de tamanho so pode ser reaproveitado se o criterio for o mesmo;
+    # se min_side mudou, todo arquivo precisa ser reavaliado
+    criterio = cfg.get("min_side", 1024)
+    reaproveitar = (_criterio_salvo(out) == criterio)
+    files = scan(cfg, {k: v[0] for k, v in old.items()} if reaproveitar else None)
     if limit:
         files = files[:limit]
 
@@ -356,6 +384,8 @@ def build_index(cfg, out=APP, progress=None, limit=None):
     counts = {"total": len(files), "kept": len(kept_rows),
               "added": 0, "removed": removed, "errors": 0}
     done = len(kept_rows)
+    if plano:                       # quantas serao realmente processadas
+        plano(len(kept_rows), len(todo))
     if progress:
         progress(done, len(files))
 
@@ -373,7 +403,7 @@ def build_index(cfg, out=APP, progress=None, limit=None):
             if not new_items:
                 return
             _salvar(out, kept_rows, kept_items, old_emb, new_embs, new_items,
-                    old_nemb, new_nembs)
+                    old_nemb, new_nembs, criterio)
 
         with ThreadPoolExecutor(max_workers=WORKERS) as pool:
             desde_checkpoint = 0
@@ -418,7 +448,7 @@ def build_index(cfg, out=APP, progress=None, limit=None):
 
     counts["added"] = len(new_items)
     items = _salvar(out, kept_rows, kept_items, old_emb, new_embs, new_items,
-                    old_nemb, new_nembs)
+                    old_nemb, new_nembs, criterio)
 
     # thumbs orfaos: so no fim da passada completa - se limpasse no checkpoint,
     # apagaria a thumb de item que ainda nao foi reprocessado
