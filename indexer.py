@@ -27,6 +27,8 @@ EXTS = {".webp", ".jpg", ".jpeg", ".png"}
 # tokens/retratos/assets soltos nao sao cena, mas passam do filtro de tamanho
 EXCL_DIRS = {"__macosx", "thumbs", "tokens", "subjects", "portraits",
              "icons", "ui", "fonts", "cards", "items", "spells", "covers"}
+# excluidas mesmo com "tudo": nao sao conteudo, sao copias/metadados
+MINIATURAS = {"__macosx", "thumbs"}
 # ponytail: arquivos <60KB nunca sao mapa >=1024px; evita abrir header de milhares de icones
 MIN_BYTES = 60 * 1024
 
@@ -132,7 +134,11 @@ def scan(cfg, conhecidos=None):
         min_bytes = opt["min_kb"] * 1024
         ignorar = {i.lower() for i in opt["ignorar"]}
         tudo = opt["tudo"]
-        excluidas = set() if tudo else EXCL_DIRS
+        # mesmo no modo "tudo", pasta de miniatura fica de fora: ela so contem
+        # copias pequenas de imagens que ja estao no indice, e elas competiam
+        # com o mapa original na busca (e o caminho copiado nao servia para
+        # jogar). Nunca ha conteudo novo ali.
+        excluidas = MINIATURAS if tudo else EXCL_DIRS
         if not root.is_dir():
             log.info("pasta inexistente: %s", root)
             continue
@@ -143,8 +149,8 @@ def scan(cfg, conhecidos=None):
                 p = Path(dirpath) / fn
                 if p.suffix.lower() not in EXTS:
                     continue
-                if not tudo and p.stem.lower().endswith("-thumb"):
-                    continue
+                if p.stem.lower().endswith("-thumb"):
+                    continue          # miniatura solta, mesmo caso das pastas
                 chave = os.path.normcase(str(p))
                 if chave in vistos:      # pastas configuradas que se sobrepoem
                     continue
