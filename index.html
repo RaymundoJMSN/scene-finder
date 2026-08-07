@@ -362,7 +362,7 @@ async function abrirCfg() {
   await renderPastas();
   await renderFontes();
   $('#cfgInfo').textContent =
-    `versão ${r.version} · dados em ${r.data_dir}` +
+    `versão ${r.version} · rodando na ${r.motor || '?'} · dados em ${r.data_dir}` +
     (r.sugestao && !CFG.folders.length ? ` · Foundry detectado: ${r.sugestao}` : '');
   if (r.sugestao && !CFG.folders.length) $('#novaPasta').value = r.sugestao;
   $('#cfg').classList.add('on');

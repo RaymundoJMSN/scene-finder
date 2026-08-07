@@ -6,6 +6,7 @@ medir no acervo real (tools/bench_modelos.py): acerto@1 15% -> 28%, MRR +49%.
 import json
 import os
 import sys
+import threading
 from functools import lru_cache
 from pathlib import Path
 
@@ -42,6 +43,14 @@ _SESS_OPTS = ort.SessionOptions()
 _SESS_OPTS.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 _cache = {}
 
+# O DirectML NAO e thread-safe: duas chamadas a Run() ao mesmo tempo derrubam o
+# processo com ACCESS_VIOLATION (0xC0000005), e ate sessoes DIFERENTES (imagem e
+# texto) colidem entre si - as vezes chegando a resetar o driver de video. Isso
+# acontece pelo caminho normal do app: basta pesquisar enquanto a indexacao roda.
+# Por isso o lock e GLOBAL, nao por sessao. No CPU seria dispensavel, mas custa
+# quase nada perto do tempo de inferencia.
+_GPU_LOCK = threading.Lock()
+
 
 @lru_cache(maxsize=1)
 def config():
@@ -54,9 +63,24 @@ def dim():
 
 def _session(nome):
     if nome not in _cache:
+        # DirectML usa qualquer GPU DX12 (AMD/NVIDIA/Intel). Medido na RX 9070 XT:
+        # inferencia ~33x mais rapida que CPU e embeddings identicos (cosseno
+        # 0.9999999999). O filtro evita o aviso do ORT em builds sem DML.
+        provedores = [p for p in ("DmlExecutionProvider", "CPUExecutionProvider")
+                      if p in ort.get_available_providers()]
         _cache[nome] = ort.InferenceSession(
-            str(MODELS / nome), _SESS_OPTS, providers=["CPUExecutionProvider"])
+            str(MODELS / nome), _SESS_OPTS,
+            providers=provedores or ["CPUExecutionProvider"])
     return _cache[nome]
+
+
+def provedor_ativo():
+    """Provider que sera usado. Nao carrega modelo so para responder isto."""
+    for nome, sess in _cache.items():
+        if isinstance(nome, str) and nome.endswith(".onnx"):
+            return sess.get_providers()[0]
+    disp = ort.get_available_providers()
+    return "DmlExecutionProvider" if "DmlExecutionProvider" in disp else disp[0]
 
 
 def _saida(sess):
@@ -91,13 +115,32 @@ def _preprocess(img):
     return a.transpose(2, 0, 1)  # HWC -> CHW
 
 
+def _rodar(sess, entradas):
+    """Toda inferencia passa por aqui - ver o comentario do _GPU_LOCK."""
+    with _GPU_LOCK:
+        return sess.run(None, entradas)[_saida(sess)]
+
+
 def encode_images(images, batch_size=16):
     sess = _session("image.onnx")
     saida = []
     for i in range(0, len(images), batch_size):
         lote = np.stack([_preprocess(im) for im in images[i:i + batch_size]])
-        saida.append(sess.run(None, {"pixel_values": lote})[_saida(sess)])
+        saida.append(_rodar(sess, {"pixel_values": lote}))
     return _norm(np.vstack(saida).astype(np.float32))
+
+
+def encode_prepared(lote):
+    """Igual a encode_images, mas recebe o tensor (N,3,224,224) ja pronto.
+
+    Permite que a indexacao prepare as imagens em varias threads enquanto o
+    ONNX infere, em vez de decodificar e inferir alternadamente numa thread so.
+    """
+    if not len(lote):
+        return np.zeros((0, dim()), np.float32)
+    v = _rodar(_session("image.onnx"),
+               {"pixel_values": np.ascontiguousarray(lote)})
+    return _norm(v.astype(np.float32))
 
 
 # ---------- texto ----------
@@ -120,5 +163,5 @@ def encode_texts(texts, batch_size=64):
     for i in range(0, len(texts), batch_size):
         encs = tok.encode_batch(texts[i:i + batch_size])
         ids = np.array([e.ids for e in encs], dtype=np.int64)
-        saida.append(sess.run(None, {"input_ids": ids})[_saida(sess)])
+        saida.append(_rodar(sess, {"input_ids": ids}))
     return _norm(np.vstack(saida).astype(np.float32))

@@ -7,7 +7,7 @@ Ele foi feito porque procurar cena para a sessão significava abrir cinco abas e
 porque as ferramentas prontas que fazem isso demoravam minutos por busca. Aqui a busca local
 responde em menos de um décimo de segundo.
 
-![versão](https://img.shields.io/badge/vers%C3%A3o-1.2.0-4ade80) ![licença](https://img.shields.io/badge/licen%C3%A7a-MIT-blue)
+![versão](https://img.shields.io/badge/vers%C3%A3o-1.3.0-4ade80) ![licença](https://img.shields.io/badge/licen%C3%A7a-MIT-blue)
 
 ## O que ele faz
 
@@ -39,8 +39,12 @@ sem pedir administrador, e cria atalhos no Menu Iniciar e na Área de Trabalho.
 
 Na primeira abertura ele procura sua pasta do Foundry sozinho. Se não achar, ou se seus mapas
 estiverem em outro lugar, use **⚙ Pastas** para apontar os diretórios e clicar em salvar — ele
-indexa em seguida. Um acervo de ~6.000 imagens leva cerca de 25 minutos de CPU, uma vez só; depois a
-indexação é incremental e leva segundos.
+indexa em seguida.
+
+A indexação usa a GPU quando há uma (DirectML: AMD, NVIDIA ou Intel) e cai para o processador
+quando não há. Medido numa RX 9070 XT com Ryzen 7: ~150 imagens por minuto. Ela **grava o progresso
+periodicamente**, então dá para fechar o app no meio e continuar depois — e arquivo já indexado é
+pulado pelo caminho e data de modificação, o que torna as indexações seguintes quase instantâneas.
 
 O app avisa quando há versão nova, baixa e abre o instalador — suas configurações são preservadas.
 Quando uma atualização troca o modelo de busca, o índice antigo deixa de servir e ele se reconstrói
@@ -60,9 +64,18 @@ A escolha do modelo foi medida, não adotada por reputação: `tools/bench_model
 a partir dos nomes dos seus próprios arquivos e mede acerto usando só o sinal visual. Trocar CLIP
 ViT-B/32 por SigLIP2 levou o acerto no primeiro resultado de 15% para 25%.
 
-Tudo roda em ONNX no processador. O encoder de texto é quantizado em int8; **o de imagem não** —
-quantizá-lo derruba a fidelidade para 0,72 e deixa a busca pior que o modelo antigo. Sem GPU e sem
-nuvem: nenhuma imagem sua sai do computador, só o texto da busca vai para as fontes online.
+Os dois encoders rodam em ONNX **sem quantização**: em int8 o de imagem cai para 0,72 de fidelidade
+e fica pior que o modelo antigo, e o de texto perde 14% de precisão de ranking mesmo parecendo
+inofensivo (0,95 de cosseno). Nada vai para a nuvem: nenhuma imagem sua sai do computador, só o
+texto da busca chega às fontes online.
+
+### Uma armadilha do DirectML
+
+Toda inferência passa por um lock global no `encoder.py`. Não é excesso de cuidado: o DirectML **não
+é thread-safe** e duas chamadas simultâneas derrubam o processo com access violation — às vezes
+levando o driver de vídeo junto. Isso acontece pelo caminho mais banal de uso, que é pesquisar
+enquanto a indexação roda. `tools/teste_concorrencia.py` reproduz o cenário; sem o lock ele mata o
+interpretador em segundos.
 
 ## Rodando a partir do código
 
@@ -79,11 +92,14 @@ venv\Scripts\python app.py                             # abre a janela
 Verificações rápidas:
 
 ```bash
-venv\Scripts\python indexer.py --check       # pipeline de indexação
-venv\Scripts\python ptbr.py                  # tradução das consultas
-venv\Scripts\python tools\smoke_encoder.py   # encoder carrega e é multilíngue
-venv\Scripts\python tools\verify_onnx.py     # ONNX bate com o modelo original
-venv\Scripts\python tools\bench_modelos.py   # compara modelos no seu acervo
+venv-build\Scripts\python indexer.py --check           # pipeline de indexação
+venv-build\Scripts\python ptbr.py                      # tradução das consultas
+venv-build\Scripts\python tools\smoke_encoder.py       # encoder carrega e é multilíngue
+venv-build\Scripts\python tools\teste_concorrencia.py  # buscar durante indexar não trava
+venv\Scripts\python tools\verify_onnx.py               # ONNX bate com o modelo original
+venv\Scripts\python tools\bench_modelos.py             # compara modelos no seu acervo
+venv-build\Scripts\python tools\bench_indexacao.py     # velocidade e fidelidade da indexação
+venv-build\Scripts\python tools\perfil.py              # onde a indexação gasta tempo
 ```
 
 Antes de trocar de modelo ou mexer em quantização, rode `bench_modelos.py`: uma escolha ruim aqui

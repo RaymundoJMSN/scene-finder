@@ -11,6 +11,7 @@ import re
 import sys
 import tempfile
 import unicodedata
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 import numpy as np
@@ -121,14 +122,44 @@ def _thumb_name(path):
     return hashlib.sha1(path.encode("utf-8")).hexdigest()[:16] + ".webp"
 
 
-def _make_thumb(path, thumbs_dir):
+THUMB = 256
+# Folga grande sobre os 224 do modelo. Medido: com 512 o pior cosseno cai para
+# 0.9986 (abaixo do limite do projeto) e a velocidade e praticamente a mesma
+# (1.43x contra 1.38x). 1024 mantem 0.9997 - o valor menor nao compensa.
+DRAFT = 1024
+# metade dos nucleos logicos: o onnxruntime tambem quer CPU para inferir
+WORKERS = max(2, min(8, (os.cpu_count() or 8) // 2))
+CHECKPOINT = 500        # imagens entre gravacoes parciais do indice
+
+
+def _preparar(par):
+    """Decodifica UMA vez e devolve (tensor pronto, miniatura).
+
+    Antes o arquivo era aberto duas vezes - uma para o embedding e outra para a
+    miniatura - e isso sozinho era ~27% do tempo de indexacao.
+    """
+    caminho = par[0]
+    try:
+        with Image.open(caminho) as im:
+            # JPEG decodifica direto em escala reduzida (DCT); pedimos com folga
+            # sobre 224 do modelo e 256 da miniatura para nao perder nitidez
+            if im.format == "JPEG":
+                im.draft("RGB", (DRAFT, DRAFT))
+            rgb = im.convert("RGB")
+            arr = encoder._preprocess(rgb)
+            thumb = rgb.copy()
+            thumb.thumbnail((THUMB, THUMB))
+        return arr, thumb
+    except Exception as e:
+        log.info("ilegivel: %s (%s)", caminho, e)
+        return None
+
+
+def _gravar_thumb(path, thumb, thumbs_dir):
     name = _thumb_name(path)
     dest = thumbs_dir / name
     if not dest.exists():
-        with Image.open(path) as im:
-            im = im.convert("RGB")
-            im.thumbnail((256, 256))
-            im.save(dest, "WEBP", quality=70)
+        thumb.save(dest, "WEBP", quality=70)
     return name
 
 
@@ -143,12 +174,21 @@ def load_index(out=APP):
     meta_p, npz_p = Path(out) / "meta.json", Path(out) / "index.npz"
     if not (meta_p.exists() and npz_p.exists()):
         return np.zeros((0, encoder.dim()), dtype=np.float32), []
-    items = json.loads(meta_p.read_text("utf-8"))["items"]
-    emb = np.load(npz_p)["emb"]
+    try:
+        items = json.loads(meta_p.read_text("utf-8"))["items"]
+        emb = np.load(npz_p)["emb"]
+    except Exception as e:
+        log.info("indice ilegivel (%s): descartando", e)
+        return np.zeros((0, encoder.dim()), dtype=np.float32), []
     if emb.shape[1] != encoder.dim():
         # indice de outro modelo: inutil, sera reconstruido do zero
         log.info("indice com dim %s, modelo usa %s: descartando",
                  emb.shape[1], encoder.dim())
+        return np.zeros((0, encoder.dim()), dtype=np.float32), []
+    if len(emb) != len(items):
+        # desalinhado: cada score sairia casado com o item errado, em silencio
+        log.info("indice desalinhado (%s vetores, %s itens): descartando",
+                 len(emb), len(items))
         return np.zeros((0, encoder.dim()), dtype=np.float32), []
     return emb, items
 
@@ -208,13 +248,80 @@ def build_name_index(items, out=APP):
     return nemb
 
 
-def load_name_index(items, out=APP):
+def _carregar_nemb(out, n_esperado):
+    """Nomes ja embedados, se casarem com o indice antigo. None = reconstruir."""
     p = Path(out) / "names.npz"
-    if p.exists():
+    if not p.exists():
+        return None
+    try:
         nemb = np.load(p)["nemb"]
+    except Exception:
+        return None
+    if len(nemb) != n_esperado or nemb.shape[1] != encoder.dim():
+        return None
+    return nemb
+
+
+def load_name_index(items, out=APP):
+    nemb = _carregar_nemb(out, len(items))
+    return build_name_index(items, out) if nemb is None else nemb
+
+
+def _empilhar(base, novos, d):
+    return np.vstack([base.reshape(-1, d),
+                      np.array(novos, dtype=np.float32).reshape(-1, d)])
+
+
+def _embed_seguro(arrays):
+    """Um erro no lote (falta de memoria, imagem estranha) nao pode derrubar a
+    indexacao inteira e reaparecer no mesmo ponto a cada tentativa.
+
+    Devolve (vetores, ok) onde ok[i] diz se aquele item pode ser gravado. Item
+    que falhou NAO entra no indice: gravar um vetor zero o marcaria como pronto
+    e ele nunca mais seria reprocessado - uma falha de GPU no meio da passada
+    envenenaria o resto do acervo em silencio.
+    """
+    try:
+        return encoder.encode_prepared(np.stack(arrays)), [True] * len(arrays)
+    except Exception as e:
+        log.info("lote falhou (%s), tentando uma a uma", e)
+        saida, ok = [], []
+        for a in arrays:
+            try:
+                saida.append(encoder.encode_prepared(np.stack([a]))[0])
+                ok.append(True)
+            except Exception as e2:
+                log.info("imagem falhou no embed: %s", e2)
+                saida.append(np.zeros(encoder.dim(), np.float32))
+                ok.append(False)
+        return np.array(saida, dtype=np.float32), ok
+
+
+def _salvar(out, kept_rows, kept_items, old_emb, new_embs, new_items,
+            old_nemb=None, new_nembs=None):
+    """Grava indice + nomes + meta de forma atomica. Serve tanto para o
+    checkpoint quanto para o fim: o que esta em disco fica sempre consistente."""
+    d = encoder.dim()
+    emb = _empilhar(old_emb[kept_rows], new_embs, d)
+    items = kept_items + new_items
+
+    # savez cru, nao comprimido: a compressao levava ~3 s por gravacao e o
+    # checkpoint roda varias vezes; custa ~10% de disco a mais
+    buf = tempfile.NamedTemporaryFile(delete=False, dir=out, suffix=".npz")
+    np.savez(buf, emb=emb)
+    buf.close()
+    os.replace(buf.name, out / "index.npz")
+
+    if old_nemb is not None:
+        nemb = _empilhar(old_nemb[kept_rows], new_nembs or [], d)
         if len(nemb) == len(items):
-            return nemb
-    return build_name_index(items, out)
+            buf = tempfile.NamedTemporaryFile(delete=False, dir=out, suffix=".npz")
+            np.savez(buf, nemb=nemb)
+            buf.close()
+            os.replace(buf.name, out / "names.npz")
+
+    _atomic_write(out / "meta.json", json.dumps({"items": items}).encode("utf-8"))
+    return items
 
 
 def build_index(cfg, out=APP, progress=None, limit=None):
@@ -224,7 +331,10 @@ def build_index(cfg, out=APP, progress=None, limit=None):
     thumbs_dir.mkdir(parents=True, exist_ok=True)
 
     old_emb, old_items = load_index(out)
-    old = {it["p"]: (it["m"], i) for i, it in enumerate(old_items)}
+    # normcase: Windows nao diferencia maiuscula, e config com caixa diferente
+    # faria o mesmo arquivo ser reindexado do zero
+    old = {os.path.normcase(it["p"]): (it["m"], i)
+           for i, it in enumerate(old_items)}
 
     files = scan(cfg)
     if limit:
@@ -233,8 +343,10 @@ def build_index(cfg, out=APP, progress=None, limit=None):
     kept_rows, kept_items, todo = [], [], []
     for p in files:
         m = os.path.getmtime(p)
-        prev = old.get(p)
-        if prev and abs(prev[0] - m) < 1e-6:
+        prev = old.get(os.path.normcase(p))
+        # tambem reprocessa se a miniatura sumiu, senao o card fica quebrado
+        if (prev and abs(prev[0] - m) < 1e-6
+                and (thumbs_dir / old_items[prev[1]]["t"]).exists()):
             kept_rows.append(prev[1])
             kept_items.append(old_items[prev[1]])
         else:
@@ -247,54 +359,76 @@ def build_index(cfg, out=APP, progress=None, limit=None):
     if progress:
         progress(done, len(files))
 
+    # nomes tambem sao incrementais: re-embedar os 22 mil a cada indexacao
+    # custava dezenas de minutos por uma informacao que nao mudou
+    old_nemb = _carregar_nemb(out, len(old_items))
+    new_nembs = [] if old_nemb is not None else None
+
     new_embs, new_items = [], []
     if todo:
         BATCH = 16
-        for i in range(0, len(todo), BATCH):
-            batch = todo[i:i + BATCH]
-            imgs, ok = [], []
-            for p, m in batch:
-                try:
-                    with Image.open(p) as im:
-                        imgs.append(im.convert("RGB"))
-                    ok.append((p, m))
-                except Exception as e:
-                    log.info("ilegivel no embed: %s (%s)", p, e)
-                    counts["errors"] += 1
-            if imgs:
-                vecs = encoder.encode_images(imgs, batch_size=BATCH)
-                for (p, m), v in zip(ok, vecs):
-                    try:
-                        t = _make_thumb(p, thumbs_dir)
-                    except Exception as e:
-                        log.info("thumb falhou: %s (%s)", p, e)
+
+        def gravar_parcial():
+            """Checkpoint: sem isto, cair na imagem 20.000 joga fora horas."""
+            if not new_items:
+                return
+            _salvar(out, kept_rows, kept_items, old_emb, new_embs, new_items,
+                    old_nemb, new_nembs)
+
+        with ThreadPoolExecutor(max_workers=WORKERS) as pool:
+            desde_checkpoint = 0
+            for i in range(0, len(todo), BATCH):
+                batch = todo[i:i + BATCH]
+                # decodificar/redimensionar em varias threads enquanto o ONNX
+                # infere o lote anterior: PIL solta o GIL nessas operacoes
+                preparados = list(pool.map(_preparar, batch))
+                arrays, prontos = [], []
+                for (p, m), r in zip(batch, preparados):
+                    if r is None:
                         counts["errors"] += 1
                         continue
-                    new_embs.append(np.asarray(v, dtype=np.float32))
-                    new_items.append({"p": p, "m": m, "t": t})
-            done += len(batch)
-            if progress:
-                progress(min(done, len(files)), len(files))
+                    arrays.append(r[0])
+                    prontos.append((p, m, r[1]))
+                if arrays:
+                    vecs, validos = _embed_seguro(arrays)
+                    gravados = []
+                    for (p, m, thumb), v, bom in zip(prontos, vecs, validos):
+                        if not bom:
+                            counts["errors"] += 1
+                            continue
+                        try:
+                            t = _gravar_thumb(p, thumb, thumbs_dir)
+                        except Exception as e:
+                            log.info("nao consegui gravar a miniatura: %s (%s)", p, e)
+                            counts["errors"] += 1
+                            continue
+                        new_embs.append(np.asarray(v, dtype=np.float32))
+                        new_items.append({"p": p, "m": m, "t": t})
+                        gravados.append(p)
+                    if new_nembs is not None and gravados:
+                        nv = encoder.encode_texts([_pretty_name(p) for p in gravados])
+                        new_nembs.extend(np.asarray(x, np.float32) for x in nv)
+                done += len(batch)
+                desde_checkpoint += len(batch)
+                if desde_checkpoint >= CHECKPOINT:
+                    gravar_parcial()
+                    desde_checkpoint = 0
+                if progress:
+                    progress(min(done, len(files)), len(files))
 
     counts["added"] = len(new_items)
-    d = encoder.dim()
-    emb = np.vstack([old_emb[kept_rows].reshape(-1, d)] +
-                    [np.array(new_embs, dtype=np.float32).reshape(-1, d)])
-    items = kept_items + new_items
+    items = _salvar(out, kept_rows, kept_items, old_emb, new_embs, new_items,
+                    old_nemb, new_nembs)
 
-    # thumbs orfaos
+    # thumbs orfaos: so no fim da passada completa - se limpasse no checkpoint,
+    # apagaria a thumb de item que ainda nao foi reprocessado
     valid = {it["t"] for it in items}
     for f in thumbs_dir.glob("*.webp"):
         if f.name not in valid:
             f.unlink(missing_ok=True)
 
-    buf = tempfile.NamedTemporaryFile(delete=False, dir=out, suffix=".npz")
-    np.savez_compressed(buf, emb=emb)
-    buf.close()
-    os.replace(buf.name, out / "index.npz")
-    _atomic_write(out / "meta.json",
-                  json.dumps({"items": items}).encode("utf-8"))
-    build_name_index(items, out)
+    if old_nemb is None:      # indice antigo sem nomes: constroi uma vez
+        build_name_index(items, out)
     log.info("index: %s", counts)
     return counts
 

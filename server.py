@@ -257,6 +257,10 @@ def start_reindex():
                 STATE["idx"]["done"], STATE["idx"]["total"] = d, t
             indexer.build_index(CFG, progress=prog)
             STATE["emb"], STATE["items"] = indexer.load_index()
+            # sem isto o peso semantico do nome fica desligado (ou pior,
+            # desalinhado) ate alguem reiniciar o app
+            STATE["nemb"] = indexer.load_name_index(STATE["items"])
+            atualizar_mascara()
         except Exception as e:
             STATE["idx"]["error"] = str(e)
         finally:
@@ -496,9 +500,12 @@ class H(BaseHTTPRequestHandler):
 
         if u.path == "/api/config":
             sug = indexer.find_foundry()
+            prov = encoder.provedor_ativo()
             return self._json({"config": CFG, "sugestao": str(sug) if sug else "",
                                "version": __version__,
-                               "data_dir": str(DATA)})
+                               "data_dir": str(DATA),
+                               "motor": "GPU (DirectML)" if prov.startswith("Dml")
+                                        else "processador"})
 
         if u.path == "/api/update":
             return self._json({"version": __version__, **updater.STATE})

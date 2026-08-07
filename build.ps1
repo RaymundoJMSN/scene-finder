@@ -11,9 +11,18 @@ if (-not (Test-Path $py)) {
             Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
     if (-not $base) { throw "nenhum python encontrado para criar o venv-build" }
     & $base -m venv venv-build
+    # onnxruntime-directml, NAO onnxruntime: e o que da acesso a GPU (DirectML
+    # funciona com AMD/NVIDIA/Intel). Os dois pacotes ocupam o mesmo diretorio
+    # em site-packages e se sobrescrevem em silencio - quem instala por ultimo
+    # vence -, por isso aqui so pode existir um.
     & (Join-Path $app 'venv-build\Scripts\pip.exe') install --quiet `
-        onnxruntime numpy pillow tokenizers pywebview pyinstaller
+        onnxruntime-directml numpy pillow tokenizers pywebview pyinstaller
 }
+
+# guarda: se alguem reinstalar onnxruntime por cima, o app volta para CPU
+# silenciosamente e ninguem percebe ate cronometrar uma indexacao
+& $py -c "import onnxruntime as o; ps=o.get_available_providers(); print('providers:', ps); assert 'DmlExecutionProvider' in ps, 'DirectML sumiu do venv-build: rode pip uninstall onnxruntime'"
+if ($LASTEXITCODE -ne 0) { throw "venv-build sem DirectML" }
 
 if (-not (Test-Path (Join-Path $app 'models\image.onnx'))) {
     throw "models\ vazio. Rode: venv\Scripts\python tools\export_onnx.py"

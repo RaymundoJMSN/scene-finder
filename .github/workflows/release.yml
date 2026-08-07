@@ -35,8 +35,16 @@ jobs:
       - name: exportar modelos ONNX
         run: python tools/export_onnx.py
 
+      # onnxruntime-directml da acesso a GPU e ocupa o MESMO namespace do
+      # onnxruntime instalado no passo de exportacao: instalar depois e de
+      # proposito, para ele vencer
       - name: dependencias de runtime e build
-        run: pip install onnxruntime numpy pillow tokenizers pywebview pyinstaller
+        run: |
+          pip uninstall -y onnxruntime
+          pip install onnxruntime-directml numpy pillow tokenizers pywebview pyinstaller
+
+      - name: conferir que o DirectML sobreviveu ao pip
+        run: python -c "import onnxruntime as o; ps=o.get_available_providers(); print(ps); assert 'DmlExecutionProvider' in ps, ps"
 
       - name: conferir o encoder exportado
         run: python tools/smoke_encoder.py
