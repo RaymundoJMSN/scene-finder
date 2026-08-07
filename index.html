@@ -35,6 +35,33 @@
   .pill:hover { color:var(--ac); }
   .card:hover .pill { display:block; }
   .pill.vars { display:block; color:var(--ac); font-size:11px; }
+  .badge-k { position:absolute; bottom:34px; right:6px; background:#111214cc; border-radius:6px; padding:1px 7px; font-size:12px; color:var(--ac); pointer-events:none; }
+  .chipsrow { display:flex; gap:8px; margin:0 0 10px; }
+  .fchip { background:var(--card2); border:1px solid var(--bd); border-radius:999px; padding:4px 14px; font-size:13px; cursor:pointer; user-select:none; }
+  .fchip.on { border-color:var(--ac); color:var(--ac); }
+  .acard { display:flex; align-items:center; gap:12px; background:var(--card); border:1px solid var(--bd); border-radius:10px; padding:8px 12px; }
+  .acard:hover { border-color:var(--ac); }
+  .acard .anm { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; }
+  .acard .anm:hover { color:var(--ac); }
+  .acard .asb { font-size:11px; color:var(--mut); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .acard audio { height:30px; max-width:280px; }
+  .acard .amain { flex:1; min-width:0; }
+  .alist { display:grid; grid-template-columns:repeat(auto-fill,minmax(360px,1fr)); gap:10px; }
+  #lb { position:fixed; inset:0; background:#000000e6; z-index:50; display:none; flex-direction:column; }
+  #lb.on { display:flex; }
+  #lb .lbtop { display:flex; align-items:center; gap:10px; padding:10px 16px; color:var(--tx); }
+  #lb .lbtit { font-size:14px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #lb .lbsub { font-size:12px; color:var(--mut); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #lb .lbmedia { flex:1; display:flex; align-items:center; justify-content:center; min-height:0; position:relative; }
+  #lb .lbmedia img, #lb .lbmedia video { max-width:96%; max-height:100%; object-fit:contain; border-radius:6px; }
+  #lb .nav { position:absolute; top:50%; transform:translateY(-50%); background:#111214cc; border:1px solid var(--bd); color:var(--tx); font-size:26px; border-radius:10px; padding:6px 14px; cursor:pointer; user-select:none; }
+  #lb .nav:hover { color:var(--ac); border-color:var(--ac); }
+  #lb .nav.prev { left:14px; }  #lb .nav.next { right:14px; }
+  #lb .lbvars { display:flex; gap:6px; overflow-x:auto; padding:10px 16px; background:#0a0b0c; }
+  #lb .lbvars img { height:64px; border-radius:6px; cursor:pointer; opacity:.65; border:2px solid transparent; }
+  #lb .lbvars img:hover { opacity:1; }
+  #lb .lbvars img.sel { opacity:1; border-color:var(--ac); }
+  #lb .lbfechar { margin-left:auto; }
   .varbox { grid-column:1/-1; background:#0d0e10; border:1px solid var(--ac); border-radius:10px; padding:12px; margin:2px 0 6px; }
   .vartit { font-size:12px; color:var(--mut); margin-bottom:10px; text-transform:uppercase; letter-spacing:.6px; }
   .simtit { font-size:14px; margin-bottom:12px; color:var(--mut); }
@@ -109,13 +136,44 @@
   </div>
   <section>
     <h2>Local <span id="lstat" class="st"></span></h2>
+    <div class="chipsrow" id="fkinds" style="display:none">
+      <span class="fchip on" data-k="">Tudo</span>
+      <span class="fchip" data-k="i">Imagens</span>
+      <span class="fchip" data-k="v">Animados</span>
+    </div>
     <div id="local"><div class="empty">Digite e aperte Enter.</div></div>
+  </section>
+  <section id="secpecas" style="display:none">
+    <h2>Peças <span id="pstat" class="st"></span></h2>
+    <div id="pecas"></div>
+  </section>
+  <section id="secaudio" style="display:none">
+    <h2>Áudio <span id="astat" class="st"></span></h2>
+    <div id="audio" class="alist"></div>
   </section>
   <section>
     <h2>Online</h2>
     <div id="online"><div class="empty">Resultados de Reddit, kemono e Czepeku aparecem aqui.</div></div>
   </section>
 </main>
+<div id="lb">
+  <div class="lbtop">
+    <div style="min-width:0">
+      <div class="lbtit" id="lbtit"></div>
+      <div class="lbsub" id="lbsub"></div>
+    </div>
+    <span style="flex:1"></span>
+    <button id="lbcopiar">copiar caminho</button>
+    <button id="lbpasta">abrir pasta</button>
+    <button id="lbabrir">abrir no app padrão</button>
+    <button class="lbfechar" id="lbfechar">✕ fechar (Esc)</button>
+  </div>
+  <div class="lbmedia" id="lbmedia">
+    <span class="nav prev" id="lbprev">‹</span>
+    <span class="nav next" id="lbnext">›</span>
+  </div>
+  <div class="lbvars" id="lbvars"></div>
+</div>
 <div id="toast">caminho copiado</div>
 <script>
 const $ = s => document.querySelector(s);
@@ -145,14 +203,16 @@ async function copy(text) {
   toast('caminho copiado');
 }
 
-function cardLocal(r) {
+function cardLocal(r, lista) {
   const d = document.createElement('div');
   d.className = 'card';
-  d.title = 'clique: copiar caminho · shift+clique: abrir pasta · botão direito: ver a imagem';
+  d.title = 'clique: copiar · duplo: visualizar · shift+clique: pasta · direito: app padrão';
   const n = (r.variants || []).length;
   d.innerHTML = `<img loading="lazy" src="${r.thumb}">
+    ${r.k === 'v' ? '<span class="badge-k">▶ animado</span>' : ''}
     <span class="acoes">
       ${n ? `<span class="pill vars" title="ver as ${n} variantes">${n + 1} variantes</span>` : ''}
+      <span class="pill lupa" title="visualizar em tela cheia">🔍</span>
       <span class="pill sim" title="mapas parecidos com este">≈</span>
       <span class="pill fold" title="abrir pasta">📁</span>
     </span>
@@ -163,16 +223,18 @@ function cardLocal(r) {
     if (e.shiftKey) { fetch(`/api/open?i=${r.i}`); toast('abrindo a pasta'); }
     else copy(r.foundry);
   };
+  d.ondblclick = e => { e.preventDefault(); abrirLightbox(r, lista || LOCAIS); };
   d.oncontextmenu = e => {
     e.preventDefault();               // sem menu do navegador dentro do app
     fetch(`/api/view?i=${r.i}`);
-    toast('abrindo a imagem');
+    toast('abrindo no app padrão');
   };
   d.querySelector('.fold').onclick = e => {
     e.stopPropagation();
     fetch(`/api/open?i=${r.i}`);
     toast('abrindo a pasta');
   };
+  d.querySelector('.lupa').onclick = e => { e.stopPropagation(); abrirLightbox(r, lista || LOCAIS); };
   d.querySelector('.sim').onclick = e => { e.stopPropagation(); similares(r.i); };
 
   const vb = d.querySelector('.vars');
@@ -180,24 +242,94 @@ function cardLocal(r) {
   return d;
 }
 
-// mostra as variantes logo abaixo do card, sem sair da busca
-function expandir(card, r) {
+// mostra as variantes logo abaixo do card, sem sair da busca.
+// busca no /api/variants para trazer TODAS - a busca so conhece as que
+// pontuaram na janela dela
+async function expandir(card, r) {
   const antigo = card.parentElement.querySelector('.varbox');
   const meu = antigo && antigo.dataset.i === String(r.i);
   if (antigo) antigo.remove();
   if (meu) return;
 
+  let todas = [r, ...(r.variants || [])];
+  try {
+    const v = await (await fetch(`/api/variants?i=${r.i}`)).json();
+    if (v.results && v.results.length) todas = v.results;
+  } catch {}
+
   const box = document.createElement('div');
   box.className = 'varbox';
   box.dataset.i = r.i;
-  box.innerHTML = `<div class="vartit">${esc(r.name)} — todas as variantes</div>`;
+  box.innerHTML = `<div class="vartit">${esc(r.name)} — ${todas.length} variantes</div>`;
   const g = document.createElement('div');
   g.className = 'grid';
-  [r, ...r.variants].forEach(v => g.appendChild(cardLocal({...v, variants: []})));
+  const lista = todas.map(v => ({...v, variants: []}));
+  lista.forEach(v => g.appendChild(cardLocal(v, lista)));
   box.appendChild(g);
   card.parentElement.insertBefore(box, card.nextSibling);
   box.scrollIntoView({block: 'nearest', behavior: 'smooth'});
 }
+
+// ---------- visualizador em tela cheia ----------
+const LB = {lista: [], pos: 0};
+
+function lbMedia(r) {
+  const alvo = $('#lbmedia');
+  alvo.querySelectorAll('img,video').forEach(e => e.remove());
+  let m;
+  if (r.k === 'v') {
+    m = document.createElement('video');
+    m.src = `/api/file?i=${r.i}`;
+    m.controls = true; m.autoplay = true; m.loop = true; m.muted = true;
+  } else {
+    m = document.createElement('img');
+    m.src = `/api/file?i=${r.i}`;
+  }
+  alvo.appendChild(m);
+  $('#lbtit').textContent = r.name;
+  $('#lbsub').textContent = r.foundry;
+  $('#lbcopiar').onclick = () => copy(r.foundry);
+  $('#lbpasta').onclick = () => { fetch(`/api/open?i=${r.i}`); toast('abrindo a pasta'); };
+  $('#lbabrir').onclick = () => { fetch(`/api/view?i=${r.i}`); toast('abrindo no app padrão'); };
+  document.querySelectorAll('#lbvars img').forEach(t =>
+    t.classList.toggle('sel', t.dataset.i === String(r.i)));
+}
+
+async function abrirLightbox(r, lista) {
+  LB.lista = lista && lista.length ? lista : [r];
+  LB.pos = Math.max(0, LB.lista.findIndex(x => x.i === r.i));
+  $('#lb').classList.add('on');
+  lbMedia(r);
+  const faixa = $('#lbvars');
+  faixa.innerHTML = '';
+  try {
+    const v = await (await fetch(`/api/variants?i=${r.i}`)).json();
+    (v.results || []).forEach(x => {
+      const t = document.createElement('img');
+      t.src = x.thumb; t.title = x.name; t.dataset.i = x.i;
+      if (x.i === r.i) t.classList.add('sel');
+      t.onclick = () => lbMedia({...x});
+      faixa.appendChild(t);
+    });
+  } catch {}
+}
+
+function lbNav(passo) {
+  if (!LB.lista.length) return;
+  LB.pos = (LB.pos + passo + LB.lista.length) % LB.lista.length;
+  abrirLightbox(LB.lista[LB.pos], LB.lista);
+}
+
+$('#lbfechar').onclick = () => $('#lb').classList.remove('on');
+$('#lbprev').onclick = () => lbNav(-1);
+$('#lbnext').onclick = () => lbNav(1);
+$('#lb').onclick = e => { if (e.target.id === 'lb' || e.target.id === 'lbmedia') $('#lb').classList.remove('on'); };
+document.addEventListener('keydown', e => {
+  if (!$('#lb').classList.contains('on')) return;
+  if (e.key === 'Escape') $('#lb').classList.remove('on');
+  else if (e.key === 'ArrowLeft') lbNav(-1);
+  else if (e.key === 'ArrowRight') lbNav(1);
+});
 
 async function similares(i) {
   const el = $('#local');
@@ -214,7 +346,8 @@ async function similares(i) {
   }
   const g = document.createElement('div');
   g.className = 'grid';
-  (r.results || []).forEach(x => g.appendChild(cardLocal(x)));
+  LOCAIS = r.results || [];
+  LOCAIS.forEach(x => g.appendChild(cardLocal(x, LOCAIS)));
   el.appendChild(g);
 }
 
@@ -230,17 +363,74 @@ function cardOnline(r) {
   return d;
 }
 
+let LOCAIS = [], FILTRO = '';
+
+function renderLocais() {
+  const el = $('#local');
+  el.innerHTML = '';
+  const vis = FILTRO ? LOCAIS.filter(x => x.k === FILTRO) : LOCAIS;
+  if (!vis.length) { el.innerHTML = '<div class="empty">nada neste filtro.</div>'; return; }
+  const g = document.createElement('div');
+  g.className = 'grid';
+  vis.forEach(x => g.appendChild(cardLocal(x, vis)));
+  el.appendChild(g);
+}
+
+function renderAudio(lista) {
+  const sec = $('#secaudio'), el = $('#audio');
+  el.innerHTML = '';
+  if (!lista || !lista.length) { sec.style.display = 'none'; return; }
+  sec.style.display = '';
+  $('#astat').textContent = `${lista.length}`;
+  lista.forEach(a => {
+    const d = document.createElement('div');
+    d.className = 'acard';
+    const dur = a.dur ? `${Math.floor(a.dur/60)}:${String(Math.round(a.dur%60)).padStart(2,'0')}` : '';
+    d.innerHTML = `<div class="amain">
+        <div class="anm" title="clique: copiar caminho">♪ ${esc(a.name)}</div>
+        <div class="asb" title="${esc(a.foundry)}">${esc(a.dir)}${dur ? ' · ' + dur : ''} · ${(a.score*100|0)}%</div>
+      </div>
+      <audio controls preload="none" src="/api/file?a=1&i=${a.i}"></audio>
+      <span class="pill" style="display:block" title="abrir pasta">📁</span>`;
+    d.querySelector('.anm').onclick = () => copy(a.foundry);
+    d.querySelector('.pill').onclick = () => { fetch(`/api/open?a=1&i=${a.i}`); toast('abrindo a pasta'); };
+    el.appendChild(d);
+  });
+}
+
 async function searchLocal(q) {
   const r = await (await fetch(`/api/search?q=${encodeURIComponent(q)}`)).json();
   const el = $('#local');
   el.innerHTML = '';
   if (!r.ready) { el.innerHTML = '<div class="empty">modelo carregando, tenta de novo em segundos…</div>'; return; }
-  if (!r.results.length) { el.innerHTML = '<div class="empty">nada no acervo local.</div>'; return; }
+  LOCAIS = r.results || [];
+  $('#fkinds').style.display = LOCAIS.some(x => x.k === 'v') ? 'flex' : 'none';
+  if (!LOCAIS.length) el.innerHTML = '<div class="empty">nada no acervo local.</div>';
+  else renderLocais();
+  renderPecas(r.pecas);
+  renderAudio(r.audio);
+}
+
+function renderPecas(lista) {
+  const sec = $('#secpecas'), el = $('#pecas');
+  el.innerHTML = '';
+  if (!lista || !lista.length) { sec.style.display = 'none'; return; }
+  sec.style.display = '';
+  $('#pstat').textContent = `${lista.length}`;
   const g = document.createElement('div');
   g.className = 'grid';
-  r.results.forEach(x => g.appendChild(cardLocal(x)));
+  lista.forEach(x => g.appendChild(cardLocal(x, lista)));
   el.appendChild(g);
 }
+
+document.querySelectorAll('#fkinds .fchip').forEach(c => {
+  c.onclick = () => {
+    document.querySelectorAll('#fkinds .fchip').forEach(x => x.classList.remove('on'));
+    c.classList.add('on');
+    FILTRO = c.dataset.k;
+    renderLocais();
+  };
+});
 
 async function searchOnline(q) {
   const on = $('#online');
@@ -292,14 +482,18 @@ async function pollStatus(loop) {
   const s = await (await fetch('/api/index/status')).json();
   const c = $('#count'), r = $('#reix');
   if (s.running) {
+    const fase = {imagens: 'imagens', audio: 'áudio (nomes)',
+                  'audio-conteudo': 'áudio (analisando o som)'}[s.fase] || 'imagens';
     // deixa explicito que o já indexado não é refeito
-    if (s.novos === null || s.novos === undefined) {
-      c.textContent = 'procurando imagens novas…';
+    if (s.fase === 'audio-conteudo') {
+      c.textContent = `${fase}: ${s.done}/${s.total}`;
+    } else if (s.novos === null || s.novos === undefined) {
+      c.textContent = `${fase}: procurando arquivos novos…`;
     } else if (s.novos === 0) {
-      c.textContent = `nada novo — ${s.ja} já indexadas`;
+      c.textContent = `${fase}: nada novo — ${s.ja} já indexados`;
     } else {
       const feitas = Math.max(0, s.done - s.ja);
-      c.textContent = `indexando ${feitas}/${s.novos} novas (${s.ja} já prontas)`;
+      c.textContent = `${fase}: ${feitas}/${s.novos} novos (${s.ja} já prontos)`;
     }
     c.classList.add('idx-on');
     r.disabled = true;

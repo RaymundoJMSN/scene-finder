@@ -16,7 +16,12 @@ if (-not (Test-Path $py)) {
     # em site-packages e se sobrescrevem em silencio - quem instala por ultimo
     # vence -, por isso aqui so pode existir um.
     & (Join-Path $app 'venv-build\Scripts\pip.exe') install --quiet `
-        onnxruntime-directml numpy pillow tokenizers pywebview pyinstaller
+        onnxruntime-directml numpy pillow tokenizers pywebview pyinstaller `
+        opencv-python-headless mutagen soundfile soxr
+}
+
+if (-not (Test-Path (Join-Path $app 'models\clap_audio.onnx'))) {
+    Write-Warning "models\clap_audio.onnx ausente: o app sai SEM busca de audio por conteudo. Rode: venv\Scripts\python tools\export_clap.py"
 }
 
 # guarda: se alguem reinstalar onnxruntime por cima, o app volta para CPU

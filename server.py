@@ -21,6 +21,7 @@ import numpy as np
 import encoder
 import indexer
 import ptbr
+import sons
 import updater
 from version import __version__
 
@@ -39,6 +40,9 @@ CZEPEKU_CATS = ["fantasy/scenes", "fantasy/maps", "scifi/scenes", "scifi/maps"]
 STATE = {
     "emb": None, "items": [], "nemb": None, "ready": False,   # busca local
     "mask": None,          # pastas visiveis (None = todas)
+    "aitems": [], "anemb": None, "acemb": None,               # audio
+    "mask_pecas": None,    # True onde o item e peca (sprite), nao cena
+    "groups": None,        # map_key -> [indices] (variantes completas)
     "idx": {"running": False, "done": 0, "total": 0, "error": None},
 }
 SEARCH_LOCK = threading.Lock()
@@ -51,15 +55,27 @@ def _norm_dir(p):
 
 
 def atualizar_mascara():
-    """Recalcula quais itens a busca enxerga, a partir de folders_off."""
-    off = [_norm_dir(f) for f in (CFG.get("folders_off") or [])]
+    """Recalcula visibilidade (folders_off) e o que e peca vs cena."""
     itens = STATE["items"]
-    if not off or not itens:
+    off = [_norm_dir(f) for f in (CFG.get("folders_off") or [])]
+    pecas_dirs = [_norm_dir(p["caminho"]) for p in indexer.pastas(CFG)
+                  if p.get("tipo") == "pecas"]
+    if not itens:
         STATE["mask"] = None
+        STATE["mask_pecas"] = None
         return
-    STATE["mask"] = np.array(
-        [not any(_norm_dir(it["p"]).startswith(o + "\\") for o in off)
-         for it in itens], dtype=bool)
+    if off:
+        STATE["mask"] = np.array(
+            [not any(_norm_dir(it["p"]).startswith(o + "\\") for o in off)
+             for it in itens], dtype=bool)
+    else:
+        STATE["mask"] = None
+    if pecas_dirs:
+        STATE["mask_pecas"] = np.array(
+            [any(_norm_dir(it["p"]).startswith(o + "\\") for o in pecas_dirs)
+             for it in itens], dtype=bool)
+    else:
+        STATE["mask_pecas"] = None
 
 
 def contar_por_pasta():
@@ -76,12 +92,23 @@ def contar_por_pasta():
     return contas
 
 
+def montar_grupos():
+    """map_key -> [indices], para listar TODAS as variantes de um mapa
+    (a busca sozinha so enxerga as que pontuaram na janela dela)."""
+    grupos = {}
+    for i, it in enumerate(STATE["items"]):
+        grupos.setdefault(indexer.map_key(it["p"]), []).append(i)
+    STATE["groups"] = grupos
+
+
 def _boot():
     STATE["emb"], STATE["items"] = indexer.load_index()
     indexer.encoder.encode_texts(["warmup"])  # carrega a sessao ONNX antes da 1a busca
     STATE["nemb"] = indexer.load_name_index(STATE["items"])
+    STATE["aitems"], STATE["anemb"], STATE["acemb"] = sons.load_audio()
     atualizar_mascara()
     STATE["ready"] = True
+    montar_grupos()
     # sem indice mas com pastas configuradas = primeira execucao ou troca de
     # modelo (o indice antigo vira incompativel). Reindexa sem o usuario pedir.
     if not STATE["items"] and CFG.get("folders"):
@@ -251,7 +278,7 @@ def start_reindex():
     if STATE["idx"]["running"]:
         return
     STATE["idx"] = {"running": True, "done": 0, "total": 0, "error": None,
-                    "novos": None, "ja": 0}
+                    "novos": None, "ja": 0, "fase": "imagens"}
 
     def run():
         try:
@@ -267,6 +294,18 @@ def start_reindex():
             # desalinhado) ate alguem reiniciar o app
             STATE["nemb"] = indexer.load_name_index(STATE["items"])
             atualizar_mascara()
+            montar_grupos()
+
+            if sons.pastas_audio(CFG):
+                STATE["idx"].update(fase="audio", done=0, total=0,
+                                    novos=None, ja=0)
+                sons.build_audio(CFG, progress=prog, plano=plano)
+                STATE["aitems"], STATE["anemb"], STATE["acemb"] = sons.load_audio()
+                if sons.clap_disponivel():
+                    STATE["idx"].update(fase="audio-conteudo", done=0, total=0,
+                                        novos=None, ja=None)
+                    sons.build_clap(CFG, progress=prog)
+                    STATE["aitems"], STATE["anemb"], STATE["acemb"] = sons.load_audio()
         except Exception as e:
             STATE["idx"]["error"] = str(e)
         finally:
@@ -277,16 +316,35 @@ def start_reindex():
 
 # ---------- handler ----------
 
+CTYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
+          ".webp": "image/webp", ".gif": "image/gif",
+          ".webm": "video/webm", ".mp4": "video/mp4", ".m4v": "video/mp4",
+          ".mp3": "audio/mpeg", ".ogg": "audio/ogg", ".opus": "audio/ogg",
+          ".wav": "audio/wav", ".flac": "audio/flac", ".m4a": "audio/mp4"}
+
+
+def _foundry_rel(p):
+    try:
+        return str(Path(p).relative_to(CFG["foundry_data"])).replace("\\", "/")
+    except (ValueError, KeyError):
+        return p.replace("\\", "/")
+
+
 def _card(score, gi):
     it = STATE["items"][gi]
     p = it["p"]
-    try:
-        foundry = str(Path(p).relative_to(CFG["foundry_data"])).replace("\\", "/")
-    except (ValueError, KeyError):
-        foundry = p.replace("\\", "/")
-    return {"i": gi, "path": p, "foundry": foundry,
+    return {"i": gi, "path": p, "foundry": _foundry_rel(p),
             "thumb": f"/thumbs/{it['t']}", "score": round(score, 3),
-            "name": Path(p).stem, "dir": "/".join(Path(p).parts[-3:-1])}
+            "name": Path(p).stem, "dir": "/".join(Path(p).parts[-3:-1]),
+            "k": it.get("k", "i")}
+
+
+def _acard(score, ai):
+    it = STATE["aitems"][ai]
+    p = it["p"]
+    return {"i": ai, "path": p, "foundry": _foundry_rel(p),
+            "score": round(score, 3), "name": Path(p).stem,
+            "dir": "/".join(Path(p).parts[-3:-1]), "dur": it.get("d", 0)}
 
 
 def _formatar(res, agrupar):
@@ -324,6 +382,57 @@ class H(BaseHTTPRequestHandler):
 
     def _json(self, obj, code=200):
         self._send(code, json.dumps(obj).encode("utf-8"))
+
+    def _arquivo(self, caminho):
+        """Serve um arquivo local com suporte a Range - players de video e
+        audio precisam disso para buscar posicao na linha do tempo."""
+        p = Path(caminho)
+        try:
+            total = p.stat().st_size
+        except OSError:
+            return self._json({"error": "arquivo sumiu"}, 404)
+        ctype = CTYPES.get(p.suffix.lower(), "application/octet-stream")
+        rng = self.headers.get("Range")
+        inicio, fim = 0, total - 1
+        code = 200
+        if rng and rng.startswith("bytes="):
+            faixa = rng[6:].split(",")[0].strip()
+            a, _, b = faixa.partition("-")
+            try:
+                if a:
+                    inicio = int(a)
+                    if b:
+                        fim = min(int(b), total - 1)
+                elif b:                       # bytes=-N (ultimos N)
+                    inicio = max(0, total - int(b))
+            except ValueError:
+                pass
+            if inicio > fim or inicio >= total:
+                self.send_response(416)
+                self.send_header("Content-Range", f"bytes */{total}")
+                self.end_headers()
+                return
+            code = 206
+        tam = fim - inicio + 1
+        self.send_response(code)
+        self.send_header("Content-Type", ctype)
+        self.send_header("Content-Length", str(tam))
+        self.send_header("Accept-Ranges", "bytes")
+        if code == 206:
+            self.send_header("Content-Range", f"bytes {inicio}-{fim}/{total}")
+        self.end_headers()
+        try:
+            with open(p, "rb") as f:
+                f.seek(inicio)
+                resto = tam
+                while resto > 0:
+                    pedaco = f.read(min(1 << 20, resto))
+                    if not pedaco:
+                        break
+                    self.wfile.write(pedaco)
+                    resto -= len(pedaco)
+        except (ConnectionAbortedError, BrokenPipeError):
+            pass          # usuario fechou o player no meio; normal
 
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
@@ -390,14 +499,48 @@ class H(BaseHTTPRequestHandler):
             if not STATE["ready"]:
                 return self._json({"ready": False, "results": []})
             alvo = CFG.get("top_k", 60)
-            with SEARCH_LOCK:
-                # busca fundo porque o agrupamento colapsa muitos resultados
-                # num card so; sem isso a tela ficaria com poucos mapas
-                res = indexer.search(q, STATE["emb"], STATE["items"],
-                                     alvo * 8, nemb=STATE["nemb"],
-                                     mask=STATE["mask"]) if q else []
-            return self._json({"ready": True,
-                               "results": _formatar(res, True)[:alvo]})
+            m, mp = STATE["mask"], STATE["mask_pecas"]
+            m_cenas, m_pecas = m, None
+            if mp is not None:
+                # cenas e pecas ranqueiam separadas: 148 mil sprites afogariam
+                # qualquer mapa num ranking misto
+                m_cenas = ~mp if m is None else (m & ~mp)
+                m_pecas = mp if m is None else (m & mp)
+            res, res_p = [], []
+            if q:
+                qe = ptbr.to_en(q)
+                with SEARCH_LOCK:
+                    # busca fundo porque o agrupamento colapsa muitos
+                    # resultados num card so
+                    res = indexer.search(q, STATE["emb"], STATE["items"],
+                                         alvo * 8, nemb=STATE["nemb"],
+                                         mask=m_cenas, q_en=qe)
+                    if m_pecas is not None and bool(m_pecas.any()):
+                        res_p = indexer.search(q, STATE["emb"], STATE["items"],
+                                               alvo * 4, nemb=STATE["nemb"],
+                                               mask=m_pecas, q_en=qe)
+            resposta = {"ready": True, "results": _formatar(res, True)[:alvo],
+                        "pecas": _formatar(res_p, True)[:alvo] if res_p else []}
+            if q and STATE["aitems"] and "audio" not in (CFG.get("sources_off") or []):
+                ares = sons.search_audio(q, STATE["aitems"], STATE["anemb"],
+                                         STATE["acemb"], top_k=30,
+                                         q_en=ptbr.to_en(q))
+                resposta["audio"] = [_acard(s, i) for s, i in ares]
+            return self._json(resposta)
+
+        if u.path == "/api/variants":
+            # TODAS as variantes do mapa, direto do indice - a busca so mostra
+            # as que pontuaram na janela dela
+            try:
+                gi = int((qs.get("i") or ["-1"])[0])
+                if STATE["groups"] is None:
+                    montar_grupos()
+                grupo = STATE["groups"].get(
+                    indexer.map_key(STATE["items"][gi]["p"]), [gi])
+                grupo = sorted(grupo, key=lambda j: STATE["items"][j]["p"])
+                return self._json({"results": [_card(0.0, j) for j in grupo]})
+            except Exception as e:
+                return self._json({"error": str(e)}, 400)
 
         if u.path == "/api/similar":
             # "mais como esta": usa o vetor da propria imagem, ja indexado
@@ -410,6 +553,12 @@ class H(BaseHTTPRequestHandler):
                     scores = STATE["emb"] @ STATE["emb"][gi]
                     if STATE["mask"] is not None:
                         scores = np.where(STATE["mask"], scores, -np.inf)
+                    mp = STATE["mask_pecas"]
+                    if mp is not None:
+                        # parecidos com uma cena = outras cenas; com uma peca,
+                        # outras pecas - misturar nao ajuda ninguem
+                        lado = mp if bool(mp[gi]) else ~mp
+                        scores = np.where(lado, scores, -np.inf)
                     ordem = [j for j in np.argsort(-scores)[:alvo * 10]
                              if np.isfinite(scores[j])]
                 # tira o proprio mapa: quem pede "parecidos" quer OUTROS mapas,
@@ -458,22 +607,29 @@ class H(BaseHTTPRequestHandler):
             except Exception as e:
                 return self._json({"error": str(e)}, 502)
 
-        if u.path == "/api/open":
+        if u.path in ("/api/open", "/api/view"):
             try:
-                it = STATE["items"][int((qs.get("i") or ["-1"])[0])]
-                subprocess.Popen(["explorer", "/select,", it["p"]])
+                lista = STATE["aitems"] if (qs.get("a") or ["0"])[0] == "1"                     else STATE["items"]
+                it = lista[int((qs.get("i") or ["-1"])[0])]
+                if u.path == "/api/open":
+                    subprocess.Popen(["explorer", "/select,", it["p"]])
+                else:
+                    os.startfile(it["p"])   # visualizador/player padrao
                 return self._json({"ok": True})
             except Exception as e:
                 return self._json({"error": str(e)}, 400)
 
-        if u.path == "/api/view":
-            # abre a imagem no visualizador padrao (ver em tamanho real)
+        if u.path == "/api/file":
+            # midia original para o visualizador interno; so itens do indice,
+            # nunca caminho vindo do cliente (sem risco de traversal)
             try:
-                it = STATE["items"][int((qs.get("i") or ["-1"])[0])]
-                os.startfile(it["p"])
-                return self._json({"ok": True})
-            except Exception as e:
-                return self._json({"error": str(e)}, 400)
+                if (qs.get("a") or ["0"])[0] == "1":
+                    it = STATE["aitems"][int((qs.get("i") or ["-1"])[0])]
+                else:
+                    it = STATE["items"][int((qs.get("i") or ["-1"])[0])]
+                return self._arquivo(it["p"])
+            except (IndexError, ValueError):
+                return self._json({"error": "i"}, 404)
 
         if u.path == "/api/ext":
             url = (qs.get("u") or [""])[0]
@@ -490,6 +646,8 @@ class H(BaseHTTPRequestHandler):
                              "label": c.get("name") or f"kemono {i}"})
             for cat in CZEPEKU_CATS:
                 srcs.append({"id": f"czepeku:{cat}", "label": f"Czepeku {cat}"})
+            if STATE["aitems"]:
+                srcs.append({"id": "audio", "label": "Áudio local"})
             for s in srcs:
                 s["on"] = s["id"] not in off
             # a busca so dispara as ligadas; a lista completa alimenta os filtros

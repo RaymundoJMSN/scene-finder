@@ -7,19 +7,29 @@ Ele foi feito porque procurar cena para a sessão significava abrir cinco abas e
 porque as ferramentas prontas que fazem isso demoravam minutos por busca. Aqui a busca local
 responde em menos de um décimo de segundo.
 
-![versão](https://img.shields.io/badge/vers%C3%A3o-1.3.0-4ade80) ![licença](https://img.shields.io/badge/licen%C3%A7a-MIT-blue)
+![versão](https://img.shields.io/badge/vers%C3%A3o-1.7.0-4ade80) ![licença](https://img.shields.io/badge/licen%C3%A7a-MIT-blue)
 
 ## O que ele faz
 
 **Acervo local** — indexa suas pastas de mapas (Foundry VTT ou qualquer outra) e busca por
 significado, não por nome de arquivo. Procurar `taverna a noite` acha `Fey Tavern Night` mesmo com a
-consulta em português e o arquivo em inglês.
+consulta em português e o arquivo em inglês. **Vídeos e GIFs entram no mesmo índice**: um mapa
+animado (`.webm`, `.mp4`, `.gif`) é indexado pelo frame central e aparece com o selo ▶ — o filtro
+"Animados" mostra só eles.
 
-Nos resultados locais: **clique** copia o caminho no formato do Foundry, **shift+clique** abre a
-pasta no Explorer e **botão direito** abre a imagem no seu visualizador, em tamanho real. Mapas que
-vêm em várias versões (Day/Night/Gridless…) ocupam um card só, com um selo que expande todas — sem
-isso, um único mapa tomaria a tela inteira. O botão **≈** procura mapas visualmente parecidos com
-aquele.
+**Áudio** — pastas de música e efeitos sonoros são pesquisáveis na mesma busca, com dois sinais:
+o nome do arquivo (multilíngue: `passos na neve` acha `Snow_Foley_Walking_On_Snow`) e o **conteúdo
+do som** via CLAP — `chuva` acha um `.wav` de chuva mesmo que o arquivo se chame `track_17`. Os
+resultados vêm com player embutido.
+
+**Peças separadas de cenas** — acervos de sprites (Forgotten Adventures) ranqueiam numa seção
+própria. Sem isso, medido: 148 mil armários e bolos afogavam qualquer mapa no ranking misto.
+
+Nos resultados locais: **clique** copia o caminho no formato do Foundry, **duplo-clique ou 🔍**
+abre o visualizador em tela cheia (setas navegam, vídeos tocam, faixa de variantes embaixo),
+**shift+clique** abre a pasta no Explorer e **botão direito** abre no app padrão. Mapas que vêm em
+várias versões (Day/Night/Gridless…) ocupam um card só, com um selo que expande **todas** as
+variantes direto do índice. O botão **≈** procura mapas visualmente parecidos com aquele.
 
 **Fontes online** — a mesma busca consulta em paralelo o Reddit (r/battlemaps, r/dndmaps,
 r/FantasyMaps), o Czepeku (separado em fantasy/scifi × scenes/maps) e criadores que você
@@ -80,6 +90,9 @@ Quando uma atualização troca o modelo de busca, o índice antigo deixa de serv
 sozinho na primeira abertura.
 
 ## Como a busca local funciona
+
+A consulta em português é ainda combinada com a tradução dela: mediar os dois embeddings sobe o
+MRR de 0,828 para 0,950 no gabarito de nomes (`tools/bench_ensemble.py`).
 
 Um modelo de imagem sozinho não resolve battle maps: vistos de cima, quase todos parecem iguais, os
 scores empatam e o primeiro resultado vira sorte. O ranking aqui soma três sinais:
@@ -151,6 +164,19 @@ Para gerar o instalador: `powershell -File build.ps1` (precisa do
 
 Índice, miniaturas e configuração ficam em `%LOCALAPPDATA%\SceneFinder` e sobrevivem às
 atualizações.
+
+## Pastas de áudio
+
+```json
+"audio_folders": [
+  "X:\\FoundryVTT\\Data\\Assets\\Musicas",
+  "X:\\FoundryVTT\\Data\\Assets\\Audio"
+]
+```
+
+A indexação dos nomes é rápida (minutos). A análise de conteúdo (CLAP) roda depois, uma vez por
+arquivo (~4 áudios/s), e é o que permite achar som por descrição. `.m4a` fica só com busca por
+nome — o decodificador não lê esse formato.
 
 ## Configurando fontes online
 

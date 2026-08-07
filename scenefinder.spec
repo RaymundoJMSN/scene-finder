@@ -8,10 +8,11 @@ datas = [
 ]
 hiddenimports = [
     "webview.platforms.winforms", "clr", "clr_loader",
-    "encoder", "indexer", "server", "ptbr", "updater", "version",
+    "encoder", "indexer", "server", "ptbr", "sons", "clap", "updater", "version",
+    "mutagen",
 ]
 binaries = []
-for mod in ("onnxruntime", "tokenizers"):
+for mod in ("onnxruntime", "tokenizers", "cv2", "soundfile", "soxr"):
     d, b, h = collect_all(mod)
     datas += d
     binaries += b

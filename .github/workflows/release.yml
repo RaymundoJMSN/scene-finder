@@ -30,10 +30,13 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install torch --index-url https://download.pytorch.org/whl/cpu
-          pip install "transformers>=5" onnx onnxruntime onnxscript pillow numpy
+          pip install "transformers>=5" onnx onnxruntime onnxscript pillow numpy soundfile soxr tokenizers
 
       - name: exportar modelos ONNX
         run: python tools/export_onnx.py
+
+      - name: exportar CLAP (busca de audio por conteudo)
+        run: python tools/export_clap.py
 
       # onnxruntime-directml da acesso a GPU e ocupa o MESMO namespace do
       # onnxruntime instalado no passo de exportacao: instalar depois e de
@@ -41,7 +44,7 @@ jobs:
       - name: dependencias de runtime e build
         run: |
           pip uninstall -y onnxruntime
-          pip install onnxruntime-directml numpy pillow tokenizers pywebview pyinstaller
+          pip install onnxruntime-directml numpy pillow tokenizers pywebview pyinstaller opencv-python-headless mutagen soundfile soxr
 
       - name: conferir que o DirectML sobreviveu ao pip
         run: python -c "import onnxruntime as o; ps=o.get_available_providers(); print(ps); assert 'DmlExecutionProvider' in ps, ps"
