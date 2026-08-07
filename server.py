@@ -92,6 +92,18 @@ def contar_por_pasta():
     return contas
 
 
+def _gravar_config():
+    """Persiste o CFG sem a porta em memoria: um servidor de teste noutra porta
+    ja 'vazou' o 8062 para o config e o app instalado sumiu do 8060."""
+    salvo = dict(CFG)
+    try:
+        em_disco = json.loads(indexer.config_path().read_text("utf-8"))
+        salvo["port"] = em_disco.get("port", indexer.DEFAULT_CONFIG["port"])
+    except Exception:
+        salvo["port"] = indexer.DEFAULT_CONFIG["port"]
+    indexer.save_config(salvo)
+
+
 def montar_grupos():
     """map_key -> [indices], para listar TODAS as variantes de um mapa
     (a busca sozinha so enxerga as que pontuaram na janela dela)."""
@@ -446,8 +458,9 @@ class H(BaseHTTPRequestHandler):
                 novo = json.loads(self.rfile.read(n) or b"{}")
             except Exception as e:
                 return self._json({"error": str(e)}, 400)
-            CFG.update({k: v for k, v in novo.items() if k in indexer.DEFAULT_CONFIG})
-            indexer.save_config(CFG)
+            CFG.update({k: v for k, v in novo.items()
+                        if k in indexer.DEFAULT_CONFIG and k != "port"})
+            _gravar_config()
             atualizar_mascara()
             return self._json({"ok": True, "config": CFG})
 
@@ -466,7 +479,7 @@ class H(BaseHTTPRequestHandler):
             if not ligado:
                 desligados.append(alvo)
             CFG[chave] = desligados
-            indexer.save_config(CFG)
+            _gravar_config()
             if tipo == "pasta":
                 atualizar_mascara()
             return self._json({"ok": True, chave: desligados})
