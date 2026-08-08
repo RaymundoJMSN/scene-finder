@@ -106,6 +106,65 @@ def contar_por_pasta():
     return contas
 
 
+def _carregar_favs():
+    try:
+        d = json.loads((DATA / "favoritos.json").read_text("utf-8"))
+    except Exception:
+        d = {}
+    STATE["favs"] = {"v": set(map(os.path.normcase, d.get("v", []))),
+                     "a": set(map(os.path.normcase, d.get("a", [])))}
+    STATE["mask_fav"] = None
+    STATE["amask_fav"] = None
+
+
+def _gravar_favs():
+    indexer._atomic_write(DATA / "favoritos.json", json.dumps(
+        {"v": sorted(STATE["favs"]["v"]),
+         "a": sorted(STATE["favs"]["a"])}).encode("utf-8"))
+
+
+def _carregar_recentes():
+    try:
+        STATE["recentes"] = json.loads((DATA / "recentes.json").read_text("utf-8"))
+    except Exception:
+        STATE["recentes"] = []
+
+
+def _registrar_recente(path, e_audio):
+    p = os.path.normcase(path)
+    STATE["recentes"] = ([{"p": path, "a": int(e_audio)}]
+                         + [r for r in STATE["recentes"]
+                            if os.path.normcase(r["p"]) != p])[:100]
+    indexer._atomic_write(DATA / "recentes.json",
+                          json.dumps(STATE["recentes"]).encode("utf-8"))
+
+
+def _mask_fav():
+    """Mascara lazy dos favoritos visuais (invalidada em toggle/reindex)."""
+    if STATE.get("mask_fav") is None and STATE["items"]:
+        fv = STATE["favs"]["v"]
+        STATE["mask_fav"] = np.array(
+            [os.path.normcase(it["p"]) in fv for it in STATE["items"]], bool)
+    return STATE.get("mask_fav")
+
+
+def _amask_fav():
+    if STATE.get("amask_fav") is None and STATE["aitems"]:
+        fa = STATE["favs"]["a"]
+        STATE["amask_fav"] = np.array(
+            [os.path.normcase(it["p"]) in fa for it in STATE["aitems"]], bool)
+    return STATE.get("amask_fav")
+
+
+def _indice_por_path():
+    if STATE.get("por_path") is None:
+        STATE["por_path"] = {os.path.normcase(it["p"]): i
+                             for i, it in enumerate(STATE["items"])}
+        STATE["apor_path"] = {os.path.normcase(it["p"]): i
+                              for i, it in enumerate(STATE["aitems"])}
+    return STATE["por_path"], STATE["apor_path"]
+
+
 def _gravar_config():
     """Persiste o CFG sem a porta em memoria: um servidor de teste noutra porta
     ja 'vazou' o 8062 para o config e o app instalado sumiu do 8060."""
@@ -150,12 +209,18 @@ def _boot():
     indexer.encoder.encode_texts(["warmup"])  # carrega a sessao ONNX antes da 1a busca
     STATE["nemb"] = indexer.load_name_index(STATE["items"])
     STATE["aitems"], STATE["anemb"], STATE["acemb"] = sons.load_audio()
+    _carregar_favs()
+    _carregar_recentes()
+    STATE["por_path"] = None
     atualizar_mascara()
     STATE["ready"] = True
     montar_grupos()
-    # sem indice mas com pastas configuradas = primeira execucao ou troca de
-    # modelo (o indice antigo vira incompativel). Reindexa sem o usuario pedir.
     if not STATE["items"] and CFG.get("folders"):
+        # sem indice mas com pastas = primeira execucao ou troca de modelo
+        start_reindex()
+    elif CFG.get("indexar_ao_abrir", True) and CFG.get("folders"):
+        # varredura incremental de abertura: com o cache do scan custa segundos
+        # e o acervo nunca fica defasado do disco
         start_reindex()
 
 
@@ -316,6 +381,76 @@ def src_czepeku(q, cat=None):
     return [it for _, it in hits[:40]]
 
 
+# ---------- baixar do online para o acervo ----------
+
+def _url_direta(d):
+    """Melhor URL de arquivo cheio que da para deduzir de cada fonte."""
+    th = d.get("thumb") or ""
+    host = urllib.parse.urlparse(th).hostname or ""
+    if "encounterkit.com" in host:
+        return th.replace("width=480", "width=1920")
+    if host == "img.kemono.cr":
+        # thumbnail -> arquivo original no servidor de dados
+        return th.replace("img.kemono.cr/thumbnail/data", "kemono.cr/data")
+    if host == "preview.redd.it":
+        nome = Path(urllib.parse.urlparse(th).path).name
+        return f"https://i.redd.it/{nome}"
+    return None
+
+
+def baixar_online(d):
+    """Baixa um resultado online para o acervo e dispara indexacao.
+
+    Fecha o ciclo achou-fora -> vira-local: o arquivo cai numa subpasta
+    "Baixados" da primeira pasta da categoria e ja entra na busca. Quando a
+    fonte nao expoe o arquivo direto, devolve nao-ok e a UI abre o post."""
+    url = _url_direta(d)
+    if not url:
+        return {"ok": False, "motivo": "fonte sem arquivo direto"}
+    host = urllib.parse.urlparse(url).hostname or ""
+    if not any(host == h or host.endswith("." + h) for h in PROXY_HOSTS):
+        return {"ok": False, "motivo": "host fora da whitelist"}
+
+    cat = d.get("cat") or "maps"
+    destinos = [p["caminho"] for p in indexer.pastas(CFG)
+                if p["categoria"] == cat] or \
+               [p["caminho"] for p in indexer.pastas(CFG)]
+    if not destinos:
+        return {"ok": False, "motivo": "nenhuma pasta configurada"}
+    pasta = Path(destinos[0]) / "Baixados"
+    pasta.mkdir(parents=True, exist_ok=True)
+
+    try:
+        dados, ctype = _http_get(url, timeout=60)
+    except Exception as e:
+        return {"ok": False, "motivo": f"download falhou: {e}"}
+    if len(dados) < 4096 or dados[:1] == b"<":
+        return {"ok": False, "motivo": "a fonte devolveu uma pagina, nao a imagem"}
+    # menos que o filtro do acervo (60 KB) = so a miniatura e publica
+    # (czepeku, p.ex.); guardar isso polui o indice - melhor abrir o post
+    if len(dados) < 60 * 1024:
+        return {"ok": False, "motivo": "so ha miniatura publica nesta fonte"}
+
+    ext = Path(urllib.parse.urlparse(url).path).suffix.lower()
+    if ext not in (".jpg", ".jpeg", ".png", ".webp", ".gif", ".webm", ".mp4"):
+        ext = {"image/jpeg": ".jpg", "image/png": ".png",
+               "image/webp": ".webp", "image/gif": ".gif"}.get(
+            (ctype or "").split(";")[0], ".jpg")
+    nome = re.sub(r'[<>:"/\\|?*\x00-\x1f]+', " ", d.get("title") or "baixado")
+    nome = re.sub(r"\s+", " ", nome).strip()[:80] or "baixado"
+    alvo = pasta / f"{nome}{ext}"
+    seq = 1
+    while alvo.exists():
+        alvo = pasta / f"{nome}-{seq}{ext}"
+        seq += 1
+    alvo.write_bytes(dados)
+    log_srv = f"baixado: {alvo} ({len(dados)/1e6:.1f} MB) de {url}"
+    indexer.log.info(log_srv)
+    start_reindex()          # incremental: so o arquivo novo e processado
+    return {"ok": True, "path": str(alvo),
+            "foundry": _foundry_rel(str(alvo)), "mb": round(len(dados) / 1e6, 1)}
+
+
 # ---------- reindex ----------
 
 def start_reindex():
@@ -337,6 +472,9 @@ def start_reindex():
             # sem isto o peso semantico do nome fica desligado (ou pior,
             # desalinhado) ate alguem reiniciar o app
             STATE["nemb"] = indexer.load_name_index(STATE["items"])
+            STATE["mask_fav"] = None
+            STATE["amask_fav"] = None
+            STATE["por_path"] = None
             atualizar_mascara()
             montar_grupos()
 
@@ -380,7 +518,8 @@ def _card(score, gi):
     return {"i": gi, "path": p, "foundry": _foundry_rel(p),
             "thumb": f"/thumbs/{it['t']}", "score": round(score, 3),
             "name": Path(p).stem, "dir": "/".join(Path(p).parts[-3:-1]),
-            "k": it.get("k", "i")}
+            "k": it.get("k", "i"),
+            "fav": os.path.normcase(p) in STATE["favs"]["v"]}
 
 
 def _acard(score, ai):
@@ -388,7 +527,8 @@ def _acard(score, ai):
     p = it["p"]
     return {"i": ai, "path": p, "foundry": _foundry_rel(p),
             "score": round(score, 3), "name": Path(p).stem,
-            "dir": "/".join(Path(p).parts[-3:-1]), "dur": it.get("d", 0)}
+            "dir": "/".join(Path(p).parts[-3:-1]), "dur": it.get("d", 0),
+            "fav": os.path.normcase(p) in STATE["favs"]["a"]}
 
 
 def _formatar(res, agrupar):
@@ -526,6 +666,41 @@ class H(BaseHTTPRequestHandler):
                 atualizar_mascara()
             return self._json({"ok": True, chave: desligados})
 
+        if path == "/api/fav":
+            n = int(self.headers.get("Content-Length") or 0)
+            try:
+                d = json.loads(self.rfile.read(n) or b"{}")
+                e_audio = bool(d.get("a"))
+                lista = STATE["aitems"] if e_audio else STATE["items"]
+                p = os.path.normcase(lista[int(d["i"])]["p"])
+            except Exception as e:
+                return self._json({"error": str(e)}, 400)
+            alvo = STATE["favs"]["a" if e_audio else "v"]
+            (alvo.add if d.get("on") else alvo.discard)(p)
+            STATE["mask_fav"] = None
+            STATE["amask_fav"] = None
+            _gravar_favs()
+            return self._json({"ok": True, "fav": p in alvo})
+
+        if path == "/api/copiou":
+            n = int(self.headers.get("Content-Length") or 0)
+            try:
+                d = json.loads(self.rfile.read(n) or b"{}")
+                e_audio = bool(d.get("a"))
+                lista = STATE["aitems"] if e_audio else STATE["items"]
+                _registrar_recente(lista[int(d["i"])]["p"], e_audio)
+                return self._json({"ok": True})
+            except Exception as e:
+                return self._json({"error": str(e)}, 400)
+
+        if path == "/api/baixar":
+            n = int(self.headers.get("Content-Length") or 0)
+            try:
+                d = json.loads(self.rfile.read(n) or b"{}")
+            except Exception as e:
+                return self._json({"error": str(e)}, 400)
+            return self._json(baixar_online(d))
+
         if path == "/api/update/download":
             updater.download_async()
             return self._json({"ok": True})
@@ -554,8 +729,13 @@ class H(BaseHTTPRequestHandler):
             if not STATE["ready"]:
                 return self._json({"ready": False, "results": []})
             alvo = CFG.get("top_k", 60)
+            try:                          # "mostrar mais" dobra a janela
+                alvo *= max(1, min(8, int((qs.get("n") or ["1"])[0])))
+            except ValueError:
+                pass
             filtro = (qs.get("f") or [""])[0]     # ""|scene|maps|scemap|assets|sounds
             anim = (qs.get("anim") or ["0"])[0] == "1"
+            so_fav = (qs.get("fav") or ["0"])[0] == "1"
             m = STATE["mask"]
             mc = STATE.get("mask_cat") or {}
             mp = STATE["mask_pecas"]
@@ -573,22 +753,40 @@ class H(BaseHTTPRequestHandler):
                                "assets": mc.get("assets"),
                                "scemap": STATE.get("mask_scemap")}
             m_anim = STATE.get("mask_anim") if anim else None
+            m_fav = _mask_fav() if so_fav else None
+
+            if so_fav and not q:
+                # sem consulta: lista os favoritos da categoria (ou todos)
+                base = base_por_filtro.get(filtro)
+                mv = combinar(m, base, m_anim, m_fav)
+                if filtro != "sounds" and mv is not None:
+                    favs = [(0.0, int(i)) for i in np.flatnonzero(mv)]
+                    favs.sort(key=lambda t: STATE["items"][t[1]]["p"].lower())
+                    resposta["results"] = _formatar(favs, True)[:alvo]
+                if filtro in ("", "sounds"):
+                    fa = _amask_fav()
+                    if fa is not None:
+                        resposta["audio"] = [
+                            _acard(0.0, int(i)) for i in np.flatnonzero(fa)][:60]
+                return self._json(resposta)
 
             if q and filtro in base_por_filtro:
                 base = base_por_filtro[filtro]
-                alvo_m = combinar(m, base, m_anim)
+                alvo_m = combinar(m, base, m_anim, m_fav)
                 if alvo_m is not None and bool(alvo_m.any()):
                     with SEARCH_LOCK:
                         res = indexer.search(q, STATE["emb"], STATE["items"],
                                              alvo * 8, nemb=STATE["nemb"],
-                                             mask=alvo_m, q_en=ptbr.to_en(q))
+                                             mask=alvo_m,
+                                             q_en=ptbr.to_en_rapido(q))
                     resposta["results"] = _formatar(res, True)[:alvo]
             elif q and filtro == "":
                 # visao "tudo": cenas+mapas juntos, pecas em secao separada
                 # (148 mil sprites afogariam qualquer mapa num ranking misto)
-                m_cenas = combinar(m, None if mp is None else ~mp, m_anim)
-                m_pecas = combinar(m, mp, m_anim) if mp is not None else None
-                qe = ptbr.to_en(q)
+                m_cenas = combinar(m, None if mp is None else ~mp, m_anim, m_fav)
+                m_pecas = (combinar(m, mp, m_anim, m_fav)
+                           if mp is not None else None)
+                qe = ptbr.to_en_rapido(q)
                 with SEARCH_LOCK:
                     res = indexer.search(q, STATE["emb"], STATE["items"],
                                          alvo * 8, nemb=STATE["nemb"],
@@ -603,11 +801,15 @@ class H(BaseHTTPRequestHandler):
 
             quer_audio = filtro in ("", "sounds")
             if q and quer_audio and STATE["aitems"]:
+                am = STATE.get("amask")
+                if so_fav:
+                    fa = _amask_fav()
+                    am = fa if am is None else (am & fa)
                 ares = sons.search_audio(q, STATE["aitems"], STATE["anemb"],
                                          STATE["acemb"],
                                          top_k=60 if filtro == "sounds" else 30,
-                                         q_en=ptbr.to_en(q),
-                                         mask=STATE.get("amask"))
+                                         q_en=ptbr.to_en_rapido(q),
+                                         mask=am)
                 resposta["audio"] = [_acard(s, i) for s, i in ares]
             return self._json(resposta)
 
@@ -756,6 +958,23 @@ class H(BaseHTTPRequestHandler):
                               "on": _norm_dir(c) not in off,
                               "categoria": "audio"})
             return self._json({"visuais": visuais, "audio": audio})
+
+        if u.path == "/api/inicio":
+            # tela vazia util: ultimos copiados + favoritos
+            pv, pa = _indice_por_path()
+            rec = []
+            for r in STATE["recentes"][:24]:
+                chave = os.path.normcase(r["p"])
+                if r.get("a") and chave in pa:
+                    rec.append({**_acard(0.0, pa[chave]), "tipo": "a"})
+                elif not r.get("a") and chave in pv:
+                    rec.append({**_card(0.0, pv[chave]), "tipo": "v"})
+            favs = [_card(0.0, pv[p]) for p in sorted(STATE["favs"]["v"])
+                    if p in pv][:24]
+            afavs = [_acard(0.0, pa[p]) for p in sorted(STATE["favs"]["a"])
+                     if p in pa][:12]
+            return self._json({"recentes": rec, "favoritos": favs,
+                               "afavoritos": afavs})
 
         if u.path == "/api/config":
             sug = indexer.find_foundry()

@@ -163,6 +163,43 @@ def to_en(query):
     return texto
 
 
+_aquecendo = set()
+
+
+def _aquecer(query):
+    try:
+        to_en(query)
+    finally:
+        with _lock:
+            _aquecendo.discard(query)
+
+
+def to_en_rapido(query):
+    """Nunca bloqueia: responde com dicionario+cache na hora e, se sobrou
+    palavra desconhecida, aquece a traducao online em background para a
+    PROXIMA busca. A primeira consulta com palavra fora do dicionario travava
+    ~4 s esperando a API - inaceitavel no meio de uma sessao de jogo."""
+    query = (query or "").strip()
+    if not query:
+        return query
+    with _lock:
+        if query in _cache:
+            return _cache[query]
+    texto, faltou = pelo_dicionario(query)
+    if faltou:
+        with _lock:
+            novo = query not in _aquecendo
+            if novo:
+                _aquecendo.add(query)
+        if novo:
+            threading.Thread(target=_aquecer, args=(query,), daemon=True).start()
+    else:
+        with _lock:
+            _cache[query] = texto
+            _gravar_cache()
+    return texto
+
+
 if __name__ == "__main__":
     assert pelo_dicionario("taverna a noite")[0] == "tavern night"
     assert pelo_dicionario("templo na selva")[0] == "temple jungle"

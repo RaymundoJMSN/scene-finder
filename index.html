@@ -85,9 +85,23 @@
   .volta { color:var(--ac); cursor:pointer; text-decoration:underline; }
   #toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(80px); background:var(--ac); color:#04240f; font-weight:600; padding:9px 20px; border-radius:99px; transition:transform .18s; z-index:99; }
   #toast.on { transform:translateX(-50%) translateY(0); }
+  .sk { border-radius:10px; background:var(--card); border:1px solid var(--bd); overflow:hidden; }
+  .sk .ski { aspect-ratio:16/10; }
+  .sk .skt { height:12px; margin:10px; border-radius:6px; }
+  .sk .ski, .sk .skt, .acardsk { background:linear-gradient(90deg,#1b1d21 25%,#262a33 37%,#1b1d21 63%); background-size:400% 100%; animation:skm 1.1s ease infinite; }
+  .acardsk { height:92px; border-radius:10px; border:1px solid var(--bd); }
+  @keyframes skm { 0% { background-position:100% 0 } 100% { background-position:0 0 } }
   .empty { color:var(--mut); font-size:13px; padding:8px 0; }
-  #spin { display:none; color:var(--ac); }
+  #spin { display:none; width:18px; height:18px; flex:0 0 18px; border:2px solid var(--bd); border-top-color:var(--ac); border-radius:50%; animation:rot .7s linear infinite; }
+  @keyframes rot { to { transform:rotate(360deg) } }
   .idx-on { color:var(--ac) !important; }
+  #np { display:inline-flex; align-items:center; gap:6px; background:var(--card2); border:1px solid var(--ac); border-radius:99px; padding:3px 6px 3px 12px; font-size:12px; color:var(--ac); max-width:340px; }
+  #np #npnome { overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  #np button { padding:1px 8px; border-radius:99px; font-size:11px; }
+  .pill.fon, .fchip.fon { color:#facc15 !important; }
+  .estrela.fon, .aestrela.fon { color:#facc15; }
+  .maisbtn { display:block; margin:14px auto 0; padding:8px 22px; border-radius:99px; }
+
   #upd { display:none; background:#153d26; border-bottom:1px solid var(--ac); padding:9px 20px; font-size:13px; align-items:center; gap:12px; }
   #upd.on { display:flex; }
   .painel { display:none; background:var(--card); border:1px solid var(--bd); border-radius:10px; padding:16px; margin-bottom:16px; }
@@ -130,7 +144,10 @@
   <div class="row">
     <h1>Scene <b>Finder</b></h1>
     <form id="f"><input id="q" placeholder="taverna à noite, jungle temple, nave abandonada…" autocomplete="off" autofocus></form>
-    <span id="spin">buscando…</span>
+    <span id="spin" title="buscando…"></span>
+    <span id="np" style="display:none"><span id="npnome"></span>
+      <button id="nppause" title="pausar">❚❚</button>
+      <button id="npstop" title="parar">✕</button></span>
   </div>
   <div class="meta">
     <span id="count">—</span>
@@ -182,6 +199,7 @@
     <span class="fchip" data-f="assets">Assets</span>
     <span class="fchip" data-f="sounds">Sounds</span>
     <span class="fchip anim" id="fanim" style="display:none">▶ Animado</span>
+    <span class="fchip anim" id="ffav" title="só favoritos (funciona até sem busca)">⭐ Favoritos</span>
   </div>
   <section id="seclocal">
     <h2 id="tlocal">Local <span id="lstat" class="st"></span></h2>
@@ -237,7 +255,7 @@ function toast(msg) {
   clearTimeout(t._h); t._h = setTimeout(() => t.classList.remove('on'), 1600);
 }
 
-async function copy(text) {
+async function copy(text, reg) {
   try { await navigator.clipboard.writeText(text); }
   catch {
     const ta = document.createElement('textarea');
@@ -245,6 +263,7 @@ async function copy(text) {
     document.execCommand('copy'); ta.remove();
   }
   toast('caminho copiado');
+  if (reg) fetch('/api/copiou', {method:'POST', body: JSON.stringify(reg)});
 }
 
 function cardLocal(r, lista) {
@@ -256,6 +275,7 @@ function cardLocal(r, lista) {
     ${r.k === 'v' ? '<span class="badge-k">▶ animado</span>' : ''}
     <span class="acoes">
       ${n ? `<span class="pill vars" title="ver as ${n} variantes">${n + 1} variantes</span>` : ''}
+      <span class="pill estrela ${r.fav ? 'fon' : ''}" title="favoritar">${r.fav ? '★' : '☆'}</span>
       <span class="pill copiar" title="copiar caminho">📋</span>
       <span class="pill sim" title="mapas parecidos com este">≈</span>
       <span class="pill fold" title="abrir pasta">📁</span>
@@ -270,14 +290,23 @@ function cardLocal(r, lista) {
   d.oncontextmenu = e => {
     e.preventDefault();               // sem menu do navegador dentro do app
     if (e.shiftKey) { fetch(`/api/open?i=${r.i}`); toast('abrindo a pasta'); }
-    else copy(r.foundry);
+    else copy(r.foundry, {i: r.i});
   };
   d.querySelector('.fold').onclick = e => {
     e.stopPropagation();
     fetch(`/api/open?i=${r.i}`);
     toast('abrindo a pasta');
   };
-  d.querySelector('.copiar').onclick = e => { e.stopPropagation(); copy(r.foundry); };
+  d.querySelector('.copiar').onclick = e => { e.stopPropagation(); copy(r.foundry, {i: r.i}); };
+  d.querySelector('.estrela').onclick = async e => {
+    e.stopPropagation();
+    r.fav = !r.fav;
+    const el2 = e.target;
+    el2.textContent = r.fav ? '★' : '☆';
+    el2.classList.toggle('fon', r.fav);
+    await fetch('/api/fav', {method:'POST', body: JSON.stringify({i: r.i, on: r.fav})});
+    toast(r.fav ? 'favoritado ★' : 'removido dos favoritos');
+  };
   d.querySelector('.sim').onclick = e => { e.stopPropagation(); similares(r.i); };
 
   const vb = d.querySelector('.vars');
@@ -333,7 +362,7 @@ function lbMedia(r) {
   alvo.appendChild(m);
   $('#lbtit').textContent = r.name;
   $('#lbsub').textContent = r.foundry;
-  $('#lbcopiar').onclick = () => copy(r.foundry);
+  $('#lbcopiar').onclick = () => copy(r.foundry, {i: r.i});
   $('#lbpasta').onclick = () => { fetch(`/api/open?i=${r.i}`); toast('abrindo a pasta'); };
   $('#lbabrir').onclick = () => { fetch(`/api/view?i=${r.i}`); toast('abrindo no app padrão'); };
   document.querySelectorAll('#lbvars .vthumb').forEach(t =>
@@ -416,7 +445,8 @@ $('#lbvars').addEventListener('wheel', e => {
 
 async function similares(i) {
   const el = $('#local');
-  el.innerHTML = '<div class="empty">procurando parecidos…</div>';
+  el.innerHTML = '';
+  el.appendChild(esqueletos(10));
   $('#online').innerHTML = '';
   const r = await (await fetch(`/api/similar?i=${i}`)).json();
   el.innerHTML = '';
@@ -440,15 +470,26 @@ function cardOnline(r) {
   const img = r.thumb ? `/api/img?u=${encodeURIComponent(r.thumb)}` : '';
   d.innerHTML = `${img ? `<img loading="lazy" src="${img}">` : '<img>'}
     <span class="badge">${esc(r.source)}</span>
+    <span class="acoes"><span class="pill baixar" title="baixar para o acervo e indexar">⬇ acervo</span></span>
     <div class="inf"><div class="nm" title="${esc(r.title)}">${esc(r.title)}</div>
     <div class="sb">abrir post ↗</div></div>`;
   d.onclick = () => fetch(`/api/ext?u=${encodeURIComponent(r.url)}`);
+  d.querySelector('.baixar').onclick = async e => {
+    e.stopPropagation();
+    toast('baixando…');
+    const cat = FCAT === 'scene' ? 'scenes' : 'maps';
+    const res = await (await fetch('/api/baixar', {method:'POST',
+      body: JSON.stringify({url: r.url, thumb: r.thumb, title: r.title,
+                            source: r.source, cat})})).json();
+    if (res.ok) toast(`no acervo (${res.mb} MB) — indexando`);
+    else { toast(`${res.motivo || 'sem arquivo direto'} — abrindo o post`); fetch(`/api/ext?u=${encodeURIComponent(r.url)}`); }
+  };
   return d;
 }
 
 let LOCAIS = [];
 // filtro seletivo: ""|scene|maps|scemap|assets|sounds (+ animado nos visuais)
-let FCAT = '', FANIM = false;
+let FCAT = '', FANIM = false, FFAV = false, NPAG = 1;
 const TITULOS = {'': 'Local', scene: 'Scenes', maps: 'Maps',
                  scemap: 'Scemap — cena e mapa do mesmo lugar',
                  assets: 'Assets (peças)', sounds: ''};
@@ -461,6 +502,13 @@ function renderLocais() {
   g.className = 'grid';
   LOCAIS.forEach(x => g.appendChild(cardLocal(x, LOCAIS)));
   el.appendChild(g);
+  if (LOCAIS.length >= 60 * NPAG && NPAG < 8) {
+    const b = document.createElement('button');
+    b.className = 'maisbtn';
+    b.textContent = 'mostrar mais resultados';
+    b.onclick = () => { NPAG *= 2; searchLocal(lastQ); };
+    el.appendChild(b);
+  }
 }
 
 function ajustarSecoes() {
@@ -478,9 +526,24 @@ function fmtDur(s) {
 
 let AUDIO_ATUAL = null;   // um som por vez: dar play num pausa o anterior
 
+function npMostrar(a, audio) {
+  $('#np').style.display = 'inline-flex';
+  $('#npnome').textContent = '♪ ' + a.name.slice(0, 38);
+  $('#npnome').title = a.name;
+  $('#nppause').onclick = () => audio.paused ? audio.play() : audio.pause();
+  $('#npstop').onclick = () => {
+    audio.pause(); audio.currentTime = 0;
+    $('#np').style.display = 'none';
+  };
+  audio.addEventListener('ended', () => {
+    if (!audio.loop) $('#np').style.display = 'none';
+  });
+}
+
 function renderAudio(lista) {
   const sec = $('#secaudio'), el = $('#audio');
-  if (AUDIO_ATUAL) { AUDIO_ATUAL.pause(); AUDIO_ATUAL = null; }
+  // o som CONTINUA tocando ao buscar outra coisa: ambiencia de chuva nao
+  // para so porque o mestre foi procurar o mapa
   el.innerHTML = '';
   if (!lista || !lista.length) { sec.style.display = 'none'; return; }
   sec.style.display = '';
@@ -491,7 +554,9 @@ function renderAudio(lista) {
     d.innerHTML = `
       <div class="atopo">
         <div class="anm" title="${esc(a.name)} — clique: copiar caminho">♪ ${esc(a.name)}</div>
-        <span class="pill afold" title="abrir pasta">📁</span>
+        <span class="pill aestrela ${a.fav ? 'fon' : ''}" style="display:block">${a.fav ? '★' : '☆'}</span>
+        <span class="pill aloop" style="display:block" title="repetir (ambiência)">🔁</span>
+        <span class="pill afold" style="display:block" title="abrir pasta">📁</span>
       </div>
       <div class="asb" title="${esc(a.foundry)}">${esc(a.dir)} · ${(a.score*100|0)}%</div>
       <div class="actl">
@@ -520,6 +585,7 @@ function renderAudio(lista) {
         AUDIO_ATUAL = audio;
         btn.textContent = '❚❚';
         btn.classList.add('tocando');
+        npMostrar(a, audio);
       };
       audio.onpause = () => { btn.textContent = '▶'; btn.classList.remove('tocando'); };
       audio.onended = () => { btn.textContent = '▶'; btn.classList.remove('tocando'); seek.value = 0; };
@@ -534,16 +600,64 @@ function renderAudio(lista) {
       const dur = isFinite(au.duration) && au.duration ? au.duration : a.dur;
       if (dur) au.currentTime = seek.value / 1000 * dur;
     };
-    d.querySelector('.anm').onclick = () => copy(a.foundry);
+    d.querySelector('.anm').onclick = () => copy(a.foundry, {a: 1, i: a.i});
     d.querySelector('.afold').onclick = () => { fetch(`/api/open?a=1&i=${a.i}`); toast('abrindo a pasta'); };
+    d.querySelector('.aloop').onclick = e => {
+      const au = garantir();
+      au.loop = !au.loop;
+      e.target.classList.toggle('fon', au.loop);
+      toast(au.loop ? 'vai repetir 🔁' : 'sem repetição');
+    };
+    d.querySelector('.aestrela').onclick = async e => {
+      a.fav = !a.fav;
+      e.target.textContent = a.fav ? '★' : '☆';
+      e.target.classList.toggle('fon', a.fav);
+      await fetch('/api/fav', {method:'POST', body: JSON.stringify({a: 1, i: a.i, on: a.fav})});
+      toast(a.fav ? 'favoritado ★' : 'removido dos favoritos');
+    };
     el.appendChild(d);
   });
 }
 
+function esqueletos(n) {
+  const g = document.createElement('div');
+  g.className = 'grid';
+  for (let i = 0; i < n; i++) {
+    const c = document.createElement('div');
+    c.className = 'sk';
+    c.innerHTML = '<div class="ski"></div><div class="skt"></div>';
+    g.appendChild(c);
+  }
+  return g;
+}
+
+function mostrarCarregando() {
+  // resposta imediata ao Enter: fantasmas pulsando onde os resultados entram
+  if (FCAT === 'sounds') {
+    const el = $('#audio');
+    el.innerHTML = '';
+    for (let i = 0; i < 8; i++) {
+      const c = document.createElement('div');
+      c.className = 'acardsk';
+      el.appendChild(c);
+    }
+    $('#secaudio').style.display = '';
+    $('#astat').textContent = '…';
+  } else {
+    const el = $('#local');
+    el.innerHTML = '';
+    el.appendChild(esqueletos(10));
+  }
+  $('#spin').style.display = 'inline-block';
+}
+
 async function searchLocal(q) {
   ajustarSecoes();
-  const url = `/api/search?q=${encodeURIComponent(q)}&f=${FCAT}&anim=${FANIM ? 1 : 0}`;
-  const r = await (await fetch(url)).json();
+  mostrarCarregando();
+  const url = `/api/search?q=${encodeURIComponent(q)}&f=${FCAT}&anim=${FANIM ? 1 : 0}&fav=${FFAV ? 1 : 0}&n=${NPAG}`;
+  let r;
+  try { r = await (await fetch(url)).json(); }
+  finally { $('#spin').style.display = 'none'; }
   const el = $('#local');
   el.innerHTML = '';
   if (!r.ready) { el.innerHTML = '<div class="empty">modelo carregando, tenta de novo em segundos…</div>'; return; }
@@ -559,15 +673,76 @@ document.querySelectorAll('#fcats .fchip:not(.anim)').forEach(c => {
     document.querySelectorAll('#fcats .fchip:not(.anim)').forEach(x => x.classList.remove('on'));
     c.classList.add('on');
     FCAT = c.dataset.f;
+    NPAG = 1;
     ajustarSecoes();
-    if (lastQ) searchLocal(lastQ);
+    if (lastQ || FFAV) searchLocal(lastQ); else renderInicio();
   };
 });
 $('#fanim').onclick = () => {
   FANIM = !FANIM;
   $('#fanim').classList.toggle('on', FANIM);
+  NPAG = 1;
   if (lastQ) searchLocal(lastQ);
 };
+$('#ffav').onclick = () => {
+  FFAV = !FFAV;
+  $('#ffav').classList.toggle('on', FFAV);
+  NPAG = 1;
+  if (FFAV || lastQ) searchLocal(lastQ);   // com FFAV, vazio lista todos os favs
+  else renderInicio();
+};
+
+// busca ao vivo: os resultados locais aparecem enquanto digita; as fontes
+// online (limites de API) continuam so no Enter
+let _viva = null;
+$('#q').addEventListener('input', () => {
+  clearTimeout(_viva);
+  _viva = setTimeout(() => {
+    const q = $('#q').value.trim();
+    NPAG = 1;
+    if (q.length >= 2) { lastQ = q; searchLocal(q); }
+    else if (!q && !FFAV) { lastQ = ''; renderInicio(); }
+  }, 350);
+});
+
+// "/" foca a busca de qualquer lugar
+document.addEventListener('keydown', e => {
+  if (e.key === '/' && document.activeElement !== $('#q')
+      && !$('#lb').classList.contains('on')) {
+    e.preventDefault();
+    $('#q').focus();
+    $('#q').select();
+  }
+});
+
+// tela vazia util: ultimos copiados + favoritos
+async function renderInicio() {
+  const el = $('#local');
+  $('#secpecas').style.display = 'none';
+  $('#secaudio').style.display = 'none';
+  try {
+    const r = await (await fetch('/api/inicio')).json();
+    el.innerHTML = '';
+    const bloco = (titulo, cards, lista) => {
+      if (!cards.length) return;
+      const h = document.createElement('h3');
+      h.textContent = titulo;
+      el.appendChild(h);
+      const g = document.createElement('div');
+      g.className = 'grid';
+      cards.forEach(x => g.appendChild(cardLocal(x, lista)));
+      el.appendChild(g);
+    };
+    const recV = (r.recentes || []).filter(x => x.tipo === 'v');
+    bloco('Recentes (copiados)', recV, recV);
+    bloco('⭐ Favoritos', r.favoritos || [], r.favoritos || []);
+    if (!el.children.length)
+      el.innerHTML = '<div class="empty">Digite para buscar. Clique = tela cheia · direito = copiar · ☆ favorita · "/" foca a busca.</div>';
+  } catch {
+    el.innerHTML = '<div class="empty">Digite e aperte Enter.</div>';
+  }
+}
+renderInicio();
 
 
 function renderPecas(lista) {
@@ -615,11 +790,11 @@ $('#q').addEventListener('keydown', e => {
 $('#f').onsubmit = e => {
   e.preventDefault();
   const q = $('#q').value.trim();
-  if (!q) return;
+  if (!q && !FFAV) { renderInicio(); return; }
   lastQ = q;
-  $('#spin').style.display = 'inline';
-  Promise.allSettled([searchLocal(q)]).then(() => $('#spin').style.display = 'none');
-  searchOnline(q);
+  NPAG = 1;
+  searchLocal(q);
+  if (q) searchOnline(q);
 };
 
 document.querySelectorAll('.ebtn').forEach(b => {

@@ -52,6 +52,7 @@ DEFAULT_CONFIG = {
     "port": 8060,
     "top_k": 60,
     "audio_folders": [],
+    "indexar_ao_abrir": True,
     "subreddits": ["battlemaps", "dndmaps", "FantasyMaps"],
     "kemono": [],
 }
