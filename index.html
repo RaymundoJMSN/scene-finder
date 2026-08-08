@@ -83,7 +83,7 @@
   .simtit { font-size:14px; margin-bottom:12px; color:var(--mut); }
   .simtit b { color:var(--tx); }
   .volta { color:var(--ac); cursor:pointer; text-decoration:underline; }
-  #toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(80px); background:var(--ac); color:#04240f; font-weight:600; padding:9px 20px; border-radius:99px; transition:transform .18s; z-index:9; }
+  #toast { position:fixed; bottom:24px; left:50%; transform:translateX(-50%) translateY(80px); background:var(--ac); color:#04240f; font-weight:600; padding:9px 20px; border-radius:99px; transition:transform .18s; z-index:99; }
   #toast.on { transform:translateX(-50%) translateY(0); }
   .empty { color:var(--mut); font-size:13px; padding:8px 0; }
   #spin { display:none; color:var(--ac); }
@@ -101,6 +101,12 @@
   #novaPasta { flex:1; min-width:200px; padding:7px 11px; border-radius:8px; border:1px solid var(--bd); background:var(--bg); color:var(--tx); font-size:13px; }
   .dim { color:var(--mut); font-size:12px; margin-top:10px; }
   .dica { font-weight:400; text-transform:none; letter-spacing:0; opacity:.75; margin-left:8px; }
+  .sw2 { position:relative; display:inline-block; width:38px; height:20px; margin:0 4px; vertical-align:middle; }
+  .sw2 input { display:none; }
+  .sw2 span { position:absolute; inset:0; border-radius:99px; background:#2c2e33; border:1px solid var(--bd); transition:background .15s; cursor:pointer; }
+  .sw2 span::after { content:""; position:absolute; top:2px; left:2px; width:14px; height:14px; border-radius:50%; background:var(--mut); transition:left .15s, background .15s; }
+  .sw2 input:checked + span { background:#153d26; border-color:var(--ac); }
+  .sw2 input:checked + span::after { left:20px; background:var(--ac); }
   .chips { display:flex; flex-wrap:wrap; gap:8px; }
   .chip { display:flex; align-items:center; gap:7px; background:var(--card2); border:1px solid var(--bd); border-radius:999px; padding:5px 13px; font-size:13px; cursor:pointer; user-select:none; }
   .chip:hover { border-color:var(--ac); }
@@ -140,7 +146,9 @@
 </header>
 <main>
   <div id="fontesPainel" class="painel">
-    <h4>Fontes online <span class="dica">clique para ligar/desligar cada uma</span></h4>
+    <h4>Fontes online
+      <label class="sw2" title="ligar/desligar todas de uma vez"><input type="checkbox" id="fontesTodas"><span></span></label>
+      <span class="dica">clique para ligar/desligar cada uma</span></h4>
     <div id="fontes" class="chips"></div>
     <h4 style="margin-top:14px">Buscar áudio fora do app</h4>
     <div class="chips">
@@ -383,6 +391,28 @@ $('#lbvars').addEventListener('wheel', e => {
   e.preventDefault();
   $('#lbvars').scrollLeft += (e.deltaY || e.deltaX) * 1.6;
 }, {passive: false});
+
+// ...e segurar o botao esquerdo arrasta a faixa (um arrasto de verdade nao
+// pode disparar o clique na miniatura ao soltar)
+(() => {
+  const faixa = $('#lbvars');
+  let puxando = false, x0 = 0, s0 = 0, arrastou = false;
+  faixa.addEventListener('mousedown', e => {
+    if (e.button !== 0) return;
+    puxando = true; arrastou = false;
+    x0 = e.clientX; s0 = faixa.scrollLeft;
+  });
+  window.addEventListener('mousemove', e => {
+    if (!puxando) return;
+    const dx = e.clientX - x0;
+    if (Math.abs(dx) > 4) arrastou = true;
+    faixa.scrollLeft = s0 - dx;
+  });
+  window.addEventListener('mouseup', () => { puxando = false; });
+  faixa.addEventListener('click', e => {
+    if (arrastou) { e.stopPropagation(); e.preventDefault(); arrastou = false; }
+  }, true);
+})();
 
 async function similares(i) {
   const el = $('#local');
@@ -684,6 +714,7 @@ async function renderCats() {
 async function renderFontes() {
   const el = $('#fontes');
   const { todas } = await (await fetch('/api/sources')).json();
+  $('#fontesTodas').checked = (todas || []).some(sc => sc.on);
   el.innerHTML = '';
   (todas || []).forEach(sc => {
     const c = document.createElement('span');
@@ -715,6 +746,15 @@ $('#cfgBtn').onclick = () => {
   const box = $('#cfg');
   box.classList.contains('on') ? box.classList.remove('on') : abrirCfg();
 };
+$('#fontesTodas').onchange = async () => {
+  await fetch('/api/toggle', {method:'POST',
+    body: JSON.stringify({tipo:'fontes-todas', alvo:'', on: $('#fontesTodas').checked})});
+  await recarregarFontes();
+  await renderFontes();
+  toast($('#fontesTodas').checked ? 'todas as fontes ligadas' : 'todas as fontes desligadas');
+  if (lastQ) searchOnline(lastQ);
+};
+
 $('#fontesBtn').onclick = async () => {
   const box = $('#fontesPainel');
   if (box.classList.contains('on')) { box.classList.remove('on'); return; }

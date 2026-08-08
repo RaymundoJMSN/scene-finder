@@ -504,6 +504,16 @@ class H(BaseHTTPRequestHandler):
                 tipo, alvo, ligado = d["tipo"], d["alvo"], bool(d["on"])
             except Exception as e:
                 return self._json({"error": str(e)}, 400)
+            if tipo == "fontes-todas":
+                if ligado:
+                    CFG["sources_off"] = []
+                else:
+                    ids = ["reddit"]
+                    ids += [f"kemono:{i}" for i in range(len(CFG.get("kemono", [])))]
+                    ids += [f"czepeku:{c}" for c in CZEPEKU_CATS]
+                    CFG["sources_off"] = ids
+                _gravar_config()
+                return self._json({"ok": True, "sources_off": CFG["sources_off"]})
             chave = "folders_off" if tipo == "pasta" else "sources_off"
             desligados = [x for x in (CFG.get(chave) or [])]
             igual = (_norm_dir if tipo == "pasta" else str)
@@ -591,9 +601,7 @@ class H(BaseHTTPRequestHandler):
                 resposta["results"] = _formatar(res, True)[:alvo]
                 resposta["pecas"] = _formatar(res_p, True)[:alvo] if res_p else []
 
-            quer_audio = (filtro == "sounds"
-                          or (filtro == "" and
-                              "audio" not in (CFG.get("sources_off") or [])))
+            quer_audio = filtro in ("", "sounds")
             if q and quer_audio and STATE["aitems"]:
                 ares = sons.search_audio(q, STATE["aitems"], STATE["anemb"],
                                          STATE["acemb"],
@@ -719,10 +727,10 @@ class H(BaseHTTPRequestHandler):
             for i, c in enumerate(CFG.get("kemono", [])):
                 srcs.append({"id": f"kemono:{i}",
                              "label": c.get("name") or f"kemono {i}"})
+            # audio local NAO entra aqui: e acervo local como os mapas, e o
+            # controle dele fica nas pastas de audio do Config
             for cat in CZEPEKU_CATS:
                 srcs.append({"id": f"czepeku:{cat}", "label": f"Czepeku {cat}"})
-            if STATE["aitems"]:
-                srcs.append({"id": "audio", "label": "Áudio local"})
             for s in srcs:
                 s["on"] = s["id"] not in off
             # a busca so dispara as ligadas; a lista completa alimenta os filtros
