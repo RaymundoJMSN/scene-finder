@@ -7,7 +7,7 @@ Ele foi feito porque procurar cena para a sessão significava abrir cinco abas e
 porque as ferramentas prontas que fazem isso demoravam minutos por busca. Aqui a busca local
 responde em menos de um décimo de segundo.
 
-![versão](https://img.shields.io/badge/vers%C3%A3o-1.8.0-4ade80) ![licença](https://img.shields.io/badge/licen%C3%A7a-MIT-blue)
+![versão](https://img.shields.io/badge/vers%C3%A3o-1.8.1-4ade80) ![licença](https://img.shields.io/badge/licen%C3%A7a-MIT-blue)
 
 ## O que ele faz
 
@@ -204,3 +204,4 @@ post original no navegador. Compre nos criadores que você usa.
 ## Licença
 
 MIT — veja [LICENSE](LICENSE). Os modelos CLIP são de terceiros e mantêm suas próprias licenças.
+

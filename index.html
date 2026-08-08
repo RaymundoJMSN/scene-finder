@@ -39,14 +39,20 @@
   .chipsrow { display:flex; gap:8px; margin:0 0 10px; }
   .fchip { background:var(--card2); border:1px solid var(--bd); border-radius:999px; padding:4px 14px; font-size:13px; cursor:pointer; user-select:none; }
   .fchip.on { border-color:var(--ac); color:var(--ac); }
-  .acard { display:flex; align-items:center; gap:12px; background:var(--card); border:1px solid var(--bd); border-radius:10px; padding:8px 12px; }
+  .acard { display:flex; flex-direction:column; gap:6px; background:var(--card); border:1px solid var(--bd); border-radius:10px; padding:10px 12px; }
   .acard:hover { border-color:var(--ac); }
-  .acard .anm { font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; }
+  .acard .atopo { display:flex; align-items:center; gap:8px; min-width:0; }
+  .acard .anm { flex:1; font-size:13px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; cursor:pointer; min-width:0; }
   .acard .anm:hover { color:var(--ac); }
   .acard .asb { font-size:11px; color:var(--mut); overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-  .acard audio { height:30px; max-width:280px; }
-  .acard .amain { flex:1; min-width:0; }
-  .alist { display:grid; grid-template-columns:repeat(auto-fill,minmax(360px,1fr)); gap:10px; }
+  .acard .afold { display:block; }
+  .actl { display:flex; align-items:center; gap:10px; }
+  .aplay { width:32px; height:32px; flex:0 0 32px; border-radius:50%; border:1px solid var(--ac); background:transparent; color:var(--ac); font-size:13px; cursor:pointer; display:flex; align-items:center; justify-content:center; padding:0; }
+  .aplay:hover, .aplay.tocando { background:var(--ac); color:#04240f; }
+  .aseek { flex:1; -webkit-appearance:none; appearance:none; height:4px; border-radius:99px; background:#2c2e33; outline:none; cursor:pointer; }
+  .aseek::-webkit-slider-thumb { -webkit-appearance:none; width:12px; height:12px; border-radius:50%; background:var(--ac); border:none; }
+  .atime { font-size:11px; color:var(--mut); font-variant-numeric:tabular-nums; white-space:nowrap; }
+  .alist { display:grid; grid-template-columns:repeat(auto-fill,minmax(340px,1fr)); gap:10px; }
   #lb { position:fixed; inset:0; background:#000000e6; z-index:50; display:none; flex-direction:column; }
   #lb.on { display:flex; }
   #lb .lbtop { display:flex; align-items:center; gap:10px; padding:10px 16px; color:var(--tx); }
@@ -66,9 +72,11 @@
   body.lb-aberto { overflow:hidden; }
   #lb .lbvars { display:flex; gap:6px; overflow-x:auto; padding:10px 16px; background:#0a0b0c; scrollbar-width:none; }
   #lb .lbvars::-webkit-scrollbar { display:none; }
-  #lb .lbvars img { height:64px; border-radius:6px; cursor:pointer; opacity:.65; border:2px solid transparent; }
-  #lb .lbvars img:hover { opacity:1; }
-  #lb .lbvars img.sel { opacity:1; border-color:var(--ac); }
+  #lb .vthumb { position:relative; flex:0 0 auto; cursor:pointer; opacity:.65; border:2px solid transparent; border-radius:8px; line-height:0; }
+  #lb .vthumb img { height:64px; border-radius:6px; display:block; }
+  #lb .vthumb:hover { opacity:1; }
+  #lb .vthumb.sel { opacity:1; border-color:var(--ac); }
+  #lb .vthumb .vb { position:absolute; right:3px; bottom:3px; background:#111214cc; color:var(--ac); border-radius:5px; font-size:10px; line-height:1.4; padding:0 4px; pointer-events:none; }
   #lb .lbfechar { margin-left:auto; }
   .varbox { grid-column:1/-1; background:#0d0e10; border:1px solid var(--ac); border-radius:10px; padding:12px; margin:2px 0 6px; }
   .vartit { font-size:12px; color:var(--mut); margin-bottom:10px; text-transform:uppercase; letter-spacing:.6px; }
@@ -304,7 +312,9 @@ function lbMedia(r) {
   const alvo = $('#lbmedia');
   alvo.querySelectorAll('img,video').forEach(e => e.remove());
   let m;
-  if (r.k === 'v') {
+  // GIF (e webp animado) nao toca em <video>: o navegador anima sozinho no <img>
+  const ehVideoReal = r.k === 'v' && !/\.(gif|webp)$/i.test(r.path || '');
+  if (ehVideoReal) {
     m = document.createElement('video');
     m.src = `/api/file?i=${r.i}`;
     m.controls = true; m.autoplay = true; m.loop = true; m.muted = true;
@@ -318,7 +328,7 @@ function lbMedia(r) {
   $('#lbcopiar').onclick = () => copy(r.foundry);
   $('#lbpasta').onclick = () => { fetch(`/api/open?i=${r.i}`); toast('abrindo a pasta'); };
   $('#lbabrir').onclick = () => { fetch(`/api/view?i=${r.i}`); toast('abrindo no app padrão'); };
-  document.querySelectorAll('#lbvars img').forEach(t =>
+  document.querySelectorAll('#lbvars .vthumb').forEach(t =>
     t.classList.toggle('sel', t.dataset.i === String(r.i)));
 }
 
@@ -333,9 +343,12 @@ async function abrirLightbox(r, lista) {
   try {
     const v = await (await fetch(`/api/variants?i=${r.i}`)).json();
     (v.results || []).forEach(x => {
-      const t = document.createElement('img');
-      t.src = x.thumb; t.title = x.name; t.dataset.i = x.i;
-      if (x.i === r.i) t.classList.add('sel');
+      const t = document.createElement('span');
+      t.className = 'vthumb' + (x.i === r.i ? ' sel' : '');
+      t.title = x.name;
+      t.dataset.i = x.i;
+      t.innerHTML = `<img src="${x.thumb}">` +
+                    (x.k === 'v' ? '<span class="vb">▶</span>' : '');
       t.onclick = () => lbMedia({...x});
       faixa.appendChild(t);
     });
@@ -427,8 +440,17 @@ function ajustarSecoes() {
   if (FCAT !== 'scene' && FCAT !== 'maps') { FANIM = false; $('#fanim').classList.remove('on'); }
 }
 
+function fmtDur(s) {
+  if (!s || !isFinite(s)) return '?:??';
+  s = Math.round(s);
+  return `${Math.floor(s/60)}:${String(s%60).padStart(2,'0')}`;
+}
+
+let AUDIO_ATUAL = null;   // um som por vez: dar play num pausa o anterior
+
 function renderAudio(lista) {
   const sec = $('#secaudio'), el = $('#audio');
+  if (AUDIO_ATUAL) { AUDIO_ATUAL.pause(); AUDIO_ATUAL = null; }
   el.innerHTML = '';
   if (!lista || !lista.length) { sec.style.display = 'none'; return; }
   sec.style.display = '';
@@ -436,15 +458,54 @@ function renderAudio(lista) {
   lista.forEach(a => {
     const d = document.createElement('div');
     d.className = 'acard';
-    const dur = a.dur ? `${Math.floor(a.dur/60)}:${String(Math.round(a.dur%60)).padStart(2,'0')}` : '';
-    d.innerHTML = `<div class="amain">
-        <div class="anm" title="clique: copiar caminho">♪ ${esc(a.name)}</div>
-        <div class="asb" title="${esc(a.foundry)}">${esc(a.dir)}${dur ? ' · ' + dur : ''} · ${(a.score*100|0)}%</div>
+    d.innerHTML = `
+      <div class="atopo">
+        <div class="anm" title="${esc(a.name)} — clique: copiar caminho">♪ ${esc(a.name)}</div>
+        <span class="pill afold" title="abrir pasta">📁</span>
       </div>
-      <audio controls preload="none" src="/api/file?a=1&i=${a.i}"></audio>
-      <span class="pill" style="display:block" title="abrir pasta">📁</span>`;
+      <div class="asb" title="${esc(a.foundry)}">${esc(a.dir)} · ${(a.score*100|0)}%</div>
+      <div class="actl">
+        <button class="aplay" title="tocar / pausar">▶</button>
+        <input class="aseek" type="range" min="0" max="1000" value="0">
+        <span class="atime">0:00 / ${fmtDur(a.dur)}</span>
+      </div>`;
+    const btn = d.querySelector('.aplay');
+    const seek = d.querySelector('.aseek');
+    const tempo = d.querySelector('.atime');
+    let audio = null;
+
+    function garantir() {
+      if (audio) return audio;
+      audio = new Audio();
+      audio.preload = 'none';
+      audio.src = `/api/file?a=1&i=${a.i}`;
+      audio.ontimeupdate = () => {
+        const dur = isFinite(audio.duration) && audio.duration ? audio.duration : a.dur;
+        if (dur) seek.value = Math.round(audio.currentTime / dur * 1000);
+        tempo.textContent = `${fmtDur(audio.currentTime)} / ${fmtDur(dur)}`;
+        seek.style.background = `linear-gradient(to right, var(--ac) ${seek.value/10}%, #2c2e33 ${seek.value/10}%)`;
+      };
+      audio.onplay = () => {
+        if (AUDIO_ATUAL && AUDIO_ATUAL !== audio) AUDIO_ATUAL.pause();
+        AUDIO_ATUAL = audio;
+        btn.textContent = '❚❚';
+        btn.classList.add('tocando');
+      };
+      audio.onpause = () => { btn.textContent = '▶'; btn.classList.remove('tocando'); };
+      audio.onended = () => { btn.textContent = '▶'; btn.classList.remove('tocando'); seek.value = 0; };
+      return audio;
+    }
+    btn.onclick = () => {
+      const au = garantir();
+      au.paused ? au.play().catch(() => toast('não consegui tocar este arquivo')) : au.pause();
+    };
+    seek.oninput = () => {
+      const au = garantir();
+      const dur = isFinite(au.duration) && au.duration ? au.duration : a.dur;
+      if (dur) au.currentTime = seek.value / 1000 * dur;
+    };
     d.querySelector('.anm').onclick = () => copy(a.foundry);
-    d.querySelector('.pill').onclick = () => { fetch(`/api/open?a=1&i=${a.i}`); toast('abrindo a pasta'); };
+    d.querySelector('.afold').onclick = () => { fetch(`/api/open?a=1&i=${a.i}`); toast('abrindo a pasta'); };
     el.appendChild(d);
   });
 }
