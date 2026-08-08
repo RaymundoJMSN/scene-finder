@@ -202,8 +202,9 @@ def build_clap(cfg, out=APP, progress=None):
     return counts
 
 
-def search_audio(q, items, nemb, cemb=None, top_k=30, q_en=None):
-    """-> [(score, indice)] ordenado. `q_en` e a consulta traduzida (p/ CLAP)."""
+def search_audio(q, items, nemb, cemb=None, top_k=30, q_en=None, mask=None):
+    """-> [(score, indice)] ordenado. `q_en` e a consulta traduzida (p/ CLAP).
+    `mask` esconde itens (pasta de audio desligada) sem tira-los do indice."""
     if not items:
         return []
     if q_en and q_en.strip().lower() != q.strip().lower():
@@ -230,8 +231,12 @@ def search_audio(q, items, nemb, cemb=None, top_k=30, q_en=None):
         except Exception as e:
             log.info("clap na busca falhou: %s", e)
 
+    if mask is not None:
+        scores = np.where(mask, scores, -np.inf)
+
     idx = np.argsort(-scores)[:top_k]
-    return [(float(scores[i]), int(i)) for i in idx]
+    return [(float(scores[i]), int(i)) for i in idx
+            if np.isfinite(scores[i])]
 
 
 def _check():

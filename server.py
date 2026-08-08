@@ -55,14 +55,14 @@ def _norm_dir(p):
 
 
 def atualizar_mascara():
-    """Recalcula visibilidade (folders_off) e o que e peca vs cena."""
+    """Recalcula visibilidade (folders_off), categoria por item e animados."""
     itens = STATE["items"]
     off = [_norm_dir(f) for f in (CFG.get("folders_off") or [])]
-    pecas_dirs = [_norm_dir(p["caminho"]) for p in indexer.pastas(CFG)
-                  if p.get("tipo") == "pecas"]
     if not itens:
         STATE["mask"] = None
         STATE["mask_pecas"] = None
+        STATE["mask_cat"] = {}
+        STATE["mask_anim"] = None
         return
     if off:
         STATE["mask"] = np.array(
@@ -70,12 +70,26 @@ def atualizar_mascara():
              for it in itens], dtype=bool)
     else:
         STATE["mask"] = None
-    if pecas_dirs:
-        STATE["mask_pecas"] = np.array(
-            [any(_norm_dir(it["p"]).startswith(o + "\\") for o in pecas_dirs)
-             for it in itens], dtype=bool)
+
+    # categoria de cada item pela pasta configurada a que pertence
+    por_cat = {}
+    for p in indexer.pastas(CFG):
+        por_cat.setdefault(p["categoria"], []).append(_norm_dir(p["caminho"]))
+    STATE["mask_cat"] = {
+        cat: np.array([any(_norm_dir(it["p"]).startswith(o + "\\")
+                           for o in dirs) for it in itens], dtype=bool)
+        for cat, dirs in por_cat.items()}
+    STATE["mask_pecas"] = STATE["mask_cat"].get("assets")
+    STATE["mask_anim"] = np.array(
+        [it.get("k", "i") == "v" for it in itens], dtype=bool)
+
+    # visibilidade das pastas de AUDIO (mesma lista folders_off)
+    if STATE["aitems"] and off:
+        STATE["amask"] = np.array(
+            [not any(_norm_dir(a["p"]).startswith(o + "\\") for o in off)
+             for a in STATE["aitems"]], dtype=bool)
     else:
-        STATE["mask_pecas"] = None
+        STATE["amask"] = None
 
 
 def contar_por_pasta():
@@ -106,11 +120,29 @@ def _gravar_config():
 
 def montar_grupos():
     """map_key -> [indices], para listar TODAS as variantes de um mapa
-    (a busca sozinha so enxerga as que pontuaram na janela dela)."""
+    (a busca sozinha so enxerga as que pontuaram na janela dela).
+
+    Tambem monta o Scemap: itens cujo nome existe NAS DUAS categorias (scene e
+    map) - criadores como o czepeku fazem a cena E o mapa de batalha do mesmo
+    lugar, e este filtro mostra so esses conjuntos."""
     grupos = {}
-    for i, it in enumerate(STATE["items"]):
-        grupos.setdefault(indexer.map_key(it["p"]), []).append(i)
+    chaves = [indexer.map_key(it["p"]) for it in STATE["items"]]
+    for i, k in enumerate(chaves):
+        grupos.setdefault(k, []).append(i)
     STATE["groups"] = grupos
+
+    mc = STATE.get("mask_cat") or {}
+    ms, mm = mc.get("scenes"), mc.get("maps")
+    if ms is not None and mm is not None:
+        em_scene = {k for i, k in enumerate(chaves) if ms[i]}
+        em_map = {k for i, k in enumerate(chaves) if mm[i]}
+        casados = em_scene & em_map
+        ambos = ms | mm
+        STATE["mask_scemap"] = np.array(
+            [bool(ambos[i]) and chaves[i] in casados
+             for i in range(len(chaves))], dtype=bool)
+    else:
+        STATE["mask_scemap"] = None
 
 
 def _boot():
@@ -512,32 +544,62 @@ class H(BaseHTTPRequestHandler):
             if not STATE["ready"]:
                 return self._json({"ready": False, "results": []})
             alvo = CFG.get("top_k", 60)
-            m, mp = STATE["mask"], STATE["mask_pecas"]
-            m_cenas, m_pecas = m, None
-            if mp is not None:
-                # cenas e pecas ranqueiam separadas: 148 mil sprites afogariam
-                # qualquer mapa num ranking misto
-                m_cenas = ~mp if m is None else (m & ~mp)
-                m_pecas = mp if m is None else (m & mp)
-            res, res_p = [], []
-            if q:
+            filtro = (qs.get("f") or [""])[0]     # ""|scene|maps|scemap|assets|sounds
+            anim = (qs.get("anim") or ["0"])[0] == "1"
+            m = STATE["mask"]
+            mc = STATE.get("mask_cat") or {}
+            mp = STATE["mask_pecas"]
+
+            def combinar(*mascaras):
+                out = None
+                for x in mascaras:
+                    if x is None:
+                        continue
+                    out = x.copy() if out is None else (out & x)
+                return out
+
+            resposta = {"ready": True, "results": [], "pecas": [], "audio": []}
+            base_por_filtro = {"scene": mc.get("scenes"), "maps": mc.get("maps"),
+                               "assets": mc.get("assets"),
+                               "scemap": STATE.get("mask_scemap")}
+            m_anim = STATE.get("mask_anim") if anim else None
+
+            if q and filtro in base_por_filtro:
+                base = base_por_filtro[filtro]
+                alvo_m = combinar(m, base, m_anim)
+                if alvo_m is not None and bool(alvo_m.any()):
+                    with SEARCH_LOCK:
+                        res = indexer.search(q, STATE["emb"], STATE["items"],
+                                             alvo * 8, nemb=STATE["nemb"],
+                                             mask=alvo_m, q_en=ptbr.to_en(q))
+                    resposta["results"] = _formatar(res, True)[:alvo]
+            elif q and filtro == "":
+                # visao "tudo": cenas+mapas juntos, pecas em secao separada
+                # (148 mil sprites afogariam qualquer mapa num ranking misto)
+                m_cenas = combinar(m, None if mp is None else ~mp, m_anim)
+                m_pecas = combinar(m, mp, m_anim) if mp is not None else None
                 qe = ptbr.to_en(q)
                 with SEARCH_LOCK:
-                    # busca fundo porque o agrupamento colapsa muitos
-                    # resultados num card so
                     res = indexer.search(q, STATE["emb"], STATE["items"],
                                          alvo * 8, nemb=STATE["nemb"],
                                          mask=m_cenas, q_en=qe)
+                    res_p = []
                     if m_pecas is not None and bool(m_pecas.any()):
                         res_p = indexer.search(q, STATE["emb"], STATE["items"],
                                                alvo * 4, nemb=STATE["nemb"],
                                                mask=m_pecas, q_en=qe)
-            resposta = {"ready": True, "results": _formatar(res, True)[:alvo],
-                        "pecas": _formatar(res_p, True)[:alvo] if res_p else []}
-            if q and STATE["aitems"] and "audio" not in (CFG.get("sources_off") or []):
+                resposta["results"] = _formatar(res, True)[:alvo]
+                resposta["pecas"] = _formatar(res_p, True)[:alvo] if res_p else []
+
+            quer_audio = (filtro == "sounds"
+                          or (filtro == "" and
+                              "audio" not in (CFG.get("sources_off") or [])))
+            if q and quer_audio and STATE["aitems"]:
                 ares = sons.search_audio(q, STATE["aitems"], STATE["anemb"],
-                                         STATE["acemb"], top_k=30,
-                                         q_en=ptbr.to_en(q))
+                                         STATE["acemb"],
+                                         top_k=60 if filtro == "sounds" else 30,
+                                         q_en=ptbr.to_en(q),
+                                         mask=STATE.get("amask"))
                 resposta["audio"] = [_acard(s, i) for s, i in ares]
             return self._json(resposta)
 
@@ -670,14 +732,22 @@ class H(BaseHTTPRequestHandler):
         if u.path == "/api/folders":
             contas = contar_por_pasta()
             off = {_norm_dir(f) for f in (CFG.get("folders_off") or [])}
-            saida = []
+            visuais = []
             for opt in indexer.pastas(CFG):
                 c = opt["caminho"]
-                saida.append({"path": c, "itens": contas.get(c, 0),
+                visuais.append({"path": c, "itens": contas.get(c, 0),
+                                "on": _norm_dir(c) not in off,
+                                "categoria": opt["categoria"],
+                                "min_side": opt["min_side"],
+                                "min_kb": opt["min_kb"]})
+            audio = []
+            for c in (CFG.get("audio_folders") or []):
+                n = sum(1 for a in STATE["aitems"]
+                        if _norm_dir(a["p"]).startswith(_norm_dir(c) + "\\"))
+                audio.append({"path": c, "itens": n,
                               "on": _norm_dir(c) not in off,
-                              "min_side": opt["min_side"],
-                              "min_kb": opt["min_kb"]})
-            return self._json(saida)
+                              "categoria": "audio"})
+            return self._json({"visuais": visuais, "audio": audio})
 
         if u.path == "/api/config":
             sug = indexer.find_foundry()

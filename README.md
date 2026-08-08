@@ -7,7 +7,7 @@ Ele foi feito porque procurar cena para a sessão significava abrir cinco abas e
 porque as ferramentas prontas que fazem isso demoravam minutos por busca. Aqui a busca local
 responde em menos de um décimo de segundo.
 
-![versão](https://img.shields.io/badge/vers%C3%A3o-1.7.0-4ade80) ![licença](https://img.shields.io/badge/licen%C3%A7a-MIT-blue)
+![versão](https://img.shields.io/badge/vers%C3%A3o-1.8.0-4ade80) ![licença](https://img.shields.io/badge/licen%C3%A7a-MIT-blue)
 
 ## O que ele faz
 
@@ -25,9 +25,10 @@ resultados vêm com player embutido.
 **Peças separadas de cenas** — acervos de sprites (Forgotten Adventures) ranqueiam numa seção
 própria. Sem isso, medido: 148 mil armários e bolos afogavam qualquer mapa no ranking misto.
 
-Nos resultados locais: **clique** copia o caminho no formato do Foundry, **duplo-clique ou 🔍**
-abre o visualizador em tela cheia (setas navegam, vídeos tocam, faixa de variantes embaixo),
-**shift+clique** abre a pasta no Explorer e **botão direito** abre no app padrão. Mapas que vêm em
+Nos resultados locais: **clique** abre o visualizador em tela cheia (setas navegam, vídeos tocam,
+faixa de variantes embaixo com rolagem pela roda do mouse), **botão direito** copia o caminho no
+formato do Foundry, **shift+clique** abre no app padrão e **shift+botão direito** abre a pasta no
+Explorer. Mapas que vêm em
 várias versões (Day/Night/Gridless…) ocupam um card só, com um selo que expande **todas** as
 variantes direto do índice. O botão **≈** procura mapas visualmente parecidos com aquele.
 
@@ -38,7 +39,15 @@ dicionário embutido de termos de cenário e, quando ele não dá conta da frase
 online com cache. A interface mostra qual termo foi usado de fato. Ainda há botões para abrir Lost
 Atlas, JamesRPGArt e Google Imagens.
 
-**Filtros** — em **⚙ Pastas** cada pasta indexada e cada fonte online tem um interruptor. Desligar
+**Filtros por categoria** — a barra Tudo / Scenes / Maps / **Scemap** / Assets / Sounds ranqueia
+só a categoria escolhida (cada pasta configurada pertence a uma). Scene e Maps ganham o filtro
+extra **▶ Animado**. O Scemap mostra apenas mapas que existem como cena E como mapa de batalha do
+mesmo lugar — criadores como o Czepeku publicam os dois. O botão **Fontes** liga/desliga cada
+fonte online, e o **⚙ Config** organiza as pastas em quatro categorias (Scenes, Mapas, Assets,
+Áudio) com adicionar/remover/interruptor por pasta.
+
+**Interruptores** — em **⚙ Config** cada pasta indexada e no **Fontes** cada fonte online tem um
+interruptor. Desligar
 uma pasta a esconde da busca **sem apagá-la do índice**: dá para manter uma pasta de mapas
 indexada e ligá-la só quando precisar, sem reindexar de novo a cada troca.
 

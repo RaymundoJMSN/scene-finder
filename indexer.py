@@ -122,6 +122,10 @@ def pastas(cfg):
         # qualquer cena no ranking misto (medido: "taverna a noite" devolvia
         # papel amarelado e bolo de chocolate no top-5)
         d.setdefault("tipo", "cenas")
+        # categoria alimenta os filtros do app: scenes | maps | assets.
+        # Sem declaracao, pecas viram assets e o resto scenes.
+        d.setdefault("categoria",
+                     "assets" if d["tipo"] == "pecas" else "scenes")
         saida.append(d)
     return saida
 
