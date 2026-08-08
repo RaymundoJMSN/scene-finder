@@ -7,7 +7,7 @@ Ele foi feito porque procurar cena para a sessão significava abrir cinco abas e
 porque as ferramentas prontas que fazem isso demoravam minutos por busca. Aqui a busca local
 responde em menos de um décimo de segundo.
 
-![versão](https://img.shields.io/badge/vers%C3%A3o-1.8.1-4ade80) ![licença](https://img.shields.io/badge/licen%C3%A7a-MIT-blue)
+![versão](https://img.shields.io/badge/vers%C3%A3o-1.9.0-4ade80) ![licença](https://img.shields.io/badge/licen%C3%A7a-MIT-blue)
 
 ## O que ele faz
 
@@ -45,6 +45,20 @@ extra **▶ Animado**. O Scemap mostra apenas mapas que existem como cena E como
 mesmo lugar — criadores como o Czepeku publicam os dois. O botão **Fontes** liga/desliga cada
 fonte online, e o **⚙ Config** organiza as pastas em quatro categorias (Scenes, Mapas, Assets,
 Áudio) com adicionar/remover/interruptor por pasta.
+
+**Busca ao vivo e favoritos** — os resultados locais aparecem enquanto você digita (as fontes
+online só são consultadas no Enter, para não gastar cota com consulta pela metade). A ⭐ em cada
+card guarda favoritos — o chip **favoritos** filtra por eles, até sem consulta nenhuma — e a tela
+inicial mostra seus favoritos e os últimos caminhos copiados. A tecla **/** foca a busca.
+
+**Player persistente** — dar play num som abre a barra "tocando agora" no topo, com pausar, parar
+e loop. A música continua tocando enquanto você busca outra coisa — dá para deixar a ambientação
+rolando e procurar o mapa da próxima cena ao mesmo tempo.
+
+**⬇ acervo** — resultado online com arquivo público acessível (Reddit, criadores do kemono) pode
+ser baixado direto para uma subpasta `Baixados` do seu acervo: ele entra no índice na hora e a
+próxima busca já o encontra como local. Fonte que só expõe miniatura (Czepeku é pago) recusa com o
+motivo e abre o post original para você comprar.
 
 **Interruptores** — em **⚙ Config** cada pasta indexada e no **Fontes** cada fonte online tem um
 interruptor. Desligar
@@ -198,8 +212,9 @@ serviço e o ID que aparecem na URL do perfil:
 ]
 ```
 
-O app não baixa nem redistribui conteúdo de lugar nenhum: ele lista títulos e miniaturas e abre o
-post original no navegador. Compre nos criadores que você usa.
+O app lista títulos e miniaturas e abre o post original no navegador; o botão ⬇ só salva, para uso
+próprio, arquivos que a fonte já expõe publicamente. Nada é redistribuído. Compre nos criadores que
+você usa.
 
 ## Licença
 
