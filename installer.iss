@@ -56,7 +56,9 @@ Type: filesandordirs; Name: "{app}"
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 var Dados: String;
 begin
-  if CurUninstallStep = usPostUninstall then begin
+  { em modo silencioso o MsgBox responderia o botao padrao (Sim) e
+    apagaria o indice sem ninguem pedir - so perguntar com UI de verdade }
+  if (CurUninstallStep = usPostUninstall) and not UninstallSilent then begin
     Dados := ExpandConstant('{localappdata}\SceneFinder');
     if DirExists(Dados) then
       if MsgBox('Remover também o índice e as miniaturas? (' + Dados + ')',
