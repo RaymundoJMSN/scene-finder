@@ -28,10 +28,15 @@ def app_dir():
     return Path(__file__).resolve().parent
 
 
+# ponytail: servidor em background pros amigos (server.py --servico): usa os dados
+# do app instalado, porta +1, sem reindexar nem checar update (o app com janela faz isso)
+SERVICO = "--servico" in sys.argv
+
+
 def data_dir():
     """Onde ficam indice, thumbs e config. Instalado em Program Files, o app nao
     pode escrever ao lado do exe - vai para LOCALAPPDATA."""
-    if frozen():
+    if frozen() or SERVICO:
         d = Path(os.environ.get("LOCALAPPDATA", Path.home())) / "SceneFinder"
         d.mkdir(parents=True, exist_ok=True)
         return d

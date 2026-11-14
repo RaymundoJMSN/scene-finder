@@ -12,7 +12,7 @@ import sys
 import tempfile
 import unicodedata
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import numpy as np
 from PIL import Image
@@ -327,7 +327,8 @@ def map_key(path):
     isto, uma busca por 'wild west saloon' devolve 12 resultados que sao 3 mapas.
     A chave e a pasta-mae + as palavras do nome que nao sao marca de variante.
     """
-    p = Path(path)
+    # PureWindowsPath: caminho do indice e sempre do Windows, mesmo com o servico no Linux
+    p = PureWindowsPath(path)
     # as PRIMEIRAS palavras nomeiam o mapa; o que vem depois e variante
     # (WildWestSaloon_NoSkull_Day, WildWestSaloon_SandStorm...). Listar todas as
     # variacoes possiveis seria infinito - o prefixo resolve sozinho.
@@ -347,7 +348,7 @@ def map_key(path):
 
 def _pretty_name(path):
     """'czepeku-scenes-081-hellfire-prison/HellfirePrison_Glow' -> texto legivel."""
-    parts = Path(path).parts[-3:]
+    parts = PureWindowsPath(path).parts[-3:]
     return " ".join(sorted(_words(" ".join(parts)), key=len, reverse=True))
 
 
@@ -589,7 +590,7 @@ def _words(text):
 def _name_words(item):
     if "w" not in item:
         # so o final do caminho importa: nome do arquivo + 2 pastas acima
-        item["w"] = _words(" ".join(Path(item["p"]).parts[-3:]))
+        item["w"] = _words(" ".join(PureWindowsPath(item["p"]).parts[-3:]))
     return item["w"]
 
 
@@ -605,24 +606,23 @@ def search(query, emb, items, top_k=60, nemb=None, mask=None, q_en=None):
 
     `mask`: array booleano do tamanho do indice; False esconde o item da busca
     sem tira-lo do indice (permite ligar/desligar pastas sem reindexar).
-    `q_en`: consulta traduzida. Mediar o embedding PT com o EN melhora o MRR de
-    0.828 para 0.950 no gabarito de nomes (tools/bench_ensemble.py) - o encoder
-    e multilingue, mas o lado ingles casa melhor com os nomes dos arquivos.
+    `q_en`: consulta traduzida. Traduziu? usa SO o vetor ingles. O texto do
+    SigLIP2 e treinado em ingles: o vetor de "porta" fica quase aleatorio
+    (topo 0.49, so guarda-roupa) e mediar com ele afunda o de "door" (0.75,
+    portas de verdade). MRR do gabarito de nomes: pt 0.828, media 0.950,
+    ingles 0.975 (tools/bench_ensemble.py).
     """
     if not len(items):
         return []
-    if q_en and q_en.strip().lower() != query.strip().lower():
-        dois = encoder.encode_texts([query, q_en])
-        q = dois.mean(axis=0)
-        q = (q / max(float(np.linalg.norm(q)), 1e-12)).astype(np.float32)
-    else:
-        q = encoder.encode_texts([query])[0]
+    traduziu = bool(q_en) and q_en.strip().lower() != query.strip().lower()
+    q = encoder.encode_texts([q_en if traduziu else query])[0]
     scores = emb @ q
 
     if nemb is not None and len(nemb) == len(items):
         scores = scores + NAME_SEM_WEIGHT * (nemb @ q)
 
-    qw = _words(query)
+    # literal tambem no ingles: os nomes dos arquivos estao em ingles
+    qw = _words(q_en if traduziu else query)
     if qw:
         lit = np.fromiter(
             (len(qw & _name_words(it)) / len(qw) for it in items),

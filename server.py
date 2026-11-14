@@ -13,7 +13,7 @@ import time
 import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from xml.etree import ElementTree
 
 import numpy as np
@@ -215,6 +215,8 @@ def _boot():
     atualizar_mascara()
     STATE["ready"] = True
     montar_grupos()
+    if encoder.SERVICO:
+        return   # quem indexa e o app com janela; dois processos no mesmo indice = corrupcao
     if not STATE["items"] and CFG.get("folders"):
         # sem indice mas com pastas = primeira execucao ou troca de modelo
         start_reindex()
@@ -505,9 +507,12 @@ CTYPES = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png",
           ".wav": "audio/wav", ".flac": "audio/flac", ".m4a": "audio/mp4"}
 
 
+# Caminho que vem do INDICE e sempre do Windows ("X:\FoundryVTT\Data\..."), mesmo quando
+# o servico de convidados roda num servidor Linux com o indice copiado do PC: por
+# isso PureWindowsPath e nao Path (no Linux o Path trata o caminho inteiro como um nome so).
 def _foundry_rel(p):
     try:
-        return str(Path(p).relative_to(CFG["foundry_data"])).replace("\\", "/")
+        return str(PureWindowsPath(p).relative_to(CFG["foundry_data"])).replace("\\", "/")
     except (ValueError, KeyError):
         return p.replace("\\", "/")
 
@@ -515,9 +520,10 @@ def _foundry_rel(p):
 def _card(score, gi):
     it = STATE["items"][gi]
     p = it["p"]
+    w = PureWindowsPath(p)
     return {"i": gi, "path": p, "foundry": _foundry_rel(p),
             "thumb": f"/thumbs/{it['t']}", "score": round(score, 3),
-            "name": Path(p).stem, "dir": "/".join(Path(p).parts[-3:-1]),
+            "name": w.stem, "dir": "/".join(w.parts[-3:-1]),
             "k": it.get("k", "i"),
             "fav": os.path.normcase(p) in STATE["favs"]["v"]}
 
@@ -525,9 +531,10 @@ def _card(score, gi):
 def _acard(score, ai):
     it = STATE["aitems"][ai]
     p = it["p"]
+    w = PureWindowsPath(p)
     return {"i": ai, "path": p, "foundry": _foundry_rel(p),
-            "score": round(score, 3), "name": Path(p).stem,
-            "dir": "/".join(Path(p).parts[-3:-1]), "dur": it.get("d", 0),
+            "score": round(score, 3), "name": w.stem,
+            "dir": "/".join(w.parts[-3:-1]), "dur": it.get("d", 0),
             "fav": os.path.normcase(p) in STATE["favs"]["a"]}
 
 
@@ -618,8 +625,25 @@ class H(BaseHTTPRequestHandler):
         except (ConnectionAbortedError, BrokenPipeError):
             pass          # usuario fechou o player no meio; normal
 
+    # Convidado = requisicao que passou por um proxy (traz X-Forwarded-For; o app local
+    # nunca traz) OU qualquer requisicao no modo --servico.
+    # No servico vale para todas de proposito: sem isso, uma requisicao sem o cabecalho
+    # (proxy mal configurado, acesso direto a porta) seria "dona" e um POST /api/reindex
+    # no servidor, que nao tem as pastas do acervo, apagaria o indice e as miniaturas.
+    # Convidado so busca e copia caminho: nada que grave, abra coisa nesta maquina, mostre
+    # a configuracao ou use o servidor para buscar em outros sites.
+    ROTAS_LOCAIS = ("/api/open", "/api/view", "/api/ext", "/api/pick", "/api/update",
+                    "/api/online", "/api/img", "/api/config", "/api/folders")
+    CSS_CONVIDADO = (b"<style>#fontesBtn,#cfgBtn,#reix,#upd,#online,#ffav,.estrela,.aestrela,"
+                     b".fold,.afold,.baixar,#lbpasta,#lbabrir{display:none!important}</style>")
+
+    def _convidado(self):
+        return encoder.SERVICO or "X-Forwarded-For" in self.headers
+
     def do_POST(self):
         path = urllib.parse.urlparse(self.path).path
+        if self._convidado():
+            return self._json({"error": "somente leitura"}, 403)
         if path == "/api/reindex":
             start_reindex()
             return self._json({"ok": True})
@@ -715,9 +739,17 @@ class H(BaseHTTPRequestHandler):
         qs = urllib.parse.parse_qs(u.query)
         q = (qs.get("q") or [""])[0].strip()
 
+        if self._convidado() and u.path == "/api/update":
+            # "ja conferi, nao ha nada": com 403 a pagina perguntava de novo a cada 4 s, para sempre
+            return self._json({"checked": True, "available": None})
+        if self._convidado() and u.path in self.ROTAS_LOCAIS:
+            return self._json({"error": "somente leitura"}, 403)
+
         if u.path == "/":
-            return self._send(200, (APP / "index.html").read_bytes(),
-                              "text/html; charset=utf-8")
+            html = (APP / "index.html").read_bytes()
+            if self._convidado():
+                html = html.replace(b"</head>", self.CSS_CONVIDADO + b"</head>", 1)
+            return self._send(200, html, "text/html; charset=utf-8")
 
         if u.path.startswith("/thumbs/"):
             f = DATA / "thumbs" / Path(u.path).name
@@ -912,6 +944,18 @@ class H(BaseHTTPRequestHandler):
                     it = STATE["aitems"][int((qs.get("i") or ["-1"])[0])]
                 else:
                     it = STATE["items"][int((qs.get("i") or ["-1"])[0])]
+                foundry = CFG.get("foundry_url")
+                if foundry:
+                    # Servico rodando numa maquina sem os originais (so indice e miniaturas):
+                    # "foundry_url" no config.json diz onde o Foundry serve a pasta Data, e o
+                    # caminho relativo a Data e o mesmo que o convidado copia.
+                    # quote: nomes tem espaco, #, +, emoji.
+                    self.send_response(302)
+                    self.send_header("Location", foundry.rstrip("/") + "/"
+                                     + urllib.parse.quote(_foundry_rel(it["p"])))
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 return self._arquivo(it["p"])
             except (IndexError, ValueError):
                 return self._json({"error": "i"}, 404)
@@ -1010,8 +1054,9 @@ class H(BaseHTTPRequestHandler):
 
 def serve():
     threading.Thread(target=_boot, daemon=True).start()
-    updater.check_async()
-    port = CFG.get("port", 8060)
+    if not encoder.SERVICO:
+        updater.check_async()
+    port = CFG.get("port", 8060) + (1 if encoder.SERVICO else 0)
     httpd = ThreadingHTTPServer(("127.0.0.1", port), H)
     return httpd, port
 

@@ -13,7 +13,7 @@ import json
 import os
 import sys
 import tempfile
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 
 import numpy as np
 
@@ -207,19 +207,16 @@ def search_audio(q, items, nemb, cemb=None, top_k=30, q_en=None, mask=None):
     `mask` esconde itens (pasta de audio desligada) sem tira-los do indice."""
     if not items:
         return []
-    if q_en and q_en.strip().lower() != q.strip().lower():
-        # mesmo ensemble PT+EN do indice visual (+15% de MRR medido)
-        dois = encoder.encode_texts([q, q_en])
-        tq = dois.mean(axis=0)
-        tq = (tq / max(float(np.linalg.norm(tq)), 1e-12)).astype(np.float32)
-    else:
-        tq = encoder.encode_texts([q])[0]
+    # traduziu? so o vetor ingles - o texto do SigLIP2 e ingles e mediar com o
+    # vetor PT (quase aleatorio) afunda o bom. Mesma regra do indexer.search.
+    traduziu = bool(q_en) and q_en.strip().lower() != q.strip().lower()
+    tq = encoder.encode_texts([q_en if traduziu else q])[0]
     scores = NAME_W * (nemb @ tq)
 
-    qw = indexer._words(q)
+    qw = indexer._words(q_en if traduziu else q)
     if qw:
         lit = np.fromiter(
-            (len(qw & indexer._words(" ".join(Path(it["p"]).parts[-3:]))) / len(qw)
+            (len(qw & indexer._words(" ".join(PureWindowsPath(it["p"]).parts[-3:]))) / len(qw)
              for it in items), dtype=np.float32, count=len(items))
         scores = scores + LIT_W * lit
 
